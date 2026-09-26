@@ -32,12 +32,10 @@ def get_top_k_matches(s1_texts, s23_texts, s1_ids, s23_ids, tfidf_params, top_k,
         
     print(f"    Vectorizing {len(s1_texts)} S1 and {len(s23_texts)} S2/S3 records...")
     
-    # Fit vectorizer on union of texts
+    # Fit on S23 (larger corpus) and transform both — avoids concatenating 5M strings
     vectorizer = TfidfVectorizer(**tfidf_params)
-    vectorizer.fit(pd.concat([s1_texts, s23_texts]))
-    
+    matrix_s23 = vectorizer.fit_transform(s23_texts)
     matrix_s1 = vectorizer.transform(s1_texts)
-    matrix_s23 = vectorizer.transform(s23_texts)
     del vectorizer
     gc.collect()
     
@@ -50,6 +48,10 @@ def get_top_k_matches(s1_texts, s23_texts, s1_ids, s23_ids, tfidf_params, top_k,
     del matrix_s23
     gc.collect()
     
+    # Pre-convert IDs to numpy arrays for fast indexing (avoid .iloc[] in hot loop)
+    s1_ids_arr = s1_ids.values
+    s23_ids_arr = s23_ids.values
+    
     n_s1 = matrix_s1.shape[0]
     num_batches = (n_s1 + batch_size - 1) // batch_size
     print(f"    Computing sparse dot product (top {top_k}) in {num_batches} batch(es) using {n_jobs} threads...")
@@ -58,10 +60,13 @@ def get_top_k_matches(s1_texts, s23_texts, s1_ids, s23_ids, tfidf_params, top_k,
     t_start = time.time()
     
     for b_idx in range(num_batches):
+        batch_t = time.time()
         start = b_idx * batch_size
         end = min(start + batch_size, n_s1)
+        print(f"      Batch {b_idx + 1}/{num_batches} started ({start}-{end} of {n_s1})...", flush=True)
+        
         sub_s1 = matrix_s1[start:end]
-        sub_s1_ids = s1_ids.iloc[start:end]
+        sub_s1_ids = s1_ids_arr[start:end]
         
         matches_batch = sp_matmul_topn(
             sub_s1, 
@@ -71,20 +76,18 @@ def get_top_k_matches(s1_texts, s23_texts, s1_ids, s23_ids, tfidf_params, top_k,
             n_threads=n_jobs
         )
         
-        # Extract non-zero elements
-        for i in range(matches_batch.shape[0]):
-            st = matches_batch.indptr[i]
-            en = matches_batch.indptr[i+1]
-            if st == en:
-                continue
-            cols = matches_batch.indices[st:en]
-            s1_id = sub_s1_ids.iloc[i]
-            for col_idx in cols:
-                candidates[s1_id].add(s23_ids.iloc[col_idx])
+        # Vectorized extraction using numpy — replaces slow Python loop with .iloc[]
+        coo = matches_batch.tocoo()
+        if coo.nnz > 0:
+            row_ids = sub_s1_ids[coo.row]
+            col_ids = s23_ids_arr[coo.col]
+            for r_id, c_id in zip(row_ids, col_ids):
+                candidates[r_id].add(c_id)
                 
-        elapsed = time.time() - t_start
-        print(f"      Batch {b_idx + 1}/{num_batches} complete ({end}/{n_s1} records processed in {elapsed:.1f}s)...")
-        del matches_batch, sub_s1
+        batch_elapsed = time.time() - batch_t
+        total_elapsed = time.time() - t_start
+        print(f"      Batch {b_idx + 1}/{num_batches} complete in {batch_elapsed:.1f}s (total: {total_elapsed:.1f}s, {coo.nnz} matches found)", flush=True)
+        del matches_batch, sub_s1, coo
         gc.collect()
         
     del matrix_s1, matrix_s23_T

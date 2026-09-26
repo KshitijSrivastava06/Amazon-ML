@@ -162,7 +162,9 @@ ADDRESS_ABBREVIATION_MAP = {
 TFIDF_NAME_PARAMS = {
     'analyzer': 'char_wb',
     'ngram_range': (3, 5),
-    'max_features': 200000,
+    'max_features': 100000,
+    'min_df': 3,          # Drop n-grams appearing in fewer than 3 docs (noise)
+    'max_df': 0.3,        # Drop n-grams appearing in >30% of docs (stop-n-grams)
     'sublinear_tf': True,
     'dtype': np.float32,
 }
@@ -171,13 +173,15 @@ TFIDF_NAME_PARAMS = {
 TFIDF_ADDR_PARAMS = {
     'analyzer': 'char_wb',
     'ngram_range': (3, 5),
-    'max_features': 150000,
+    'max_features': 80000,
+    'min_df': 3,          # Drop n-grams appearing in fewer than 3 docs (noise)
+    'max_df': 0.3,        # Drop n-grams appearing in >30% of docs (stop-n-grams)
     'sublinear_tf': True,
     'dtype': np.float32,
 }
 
 # sparse_dot_topn: number of top candidates per S1 entity
-BLOCKING_TOP_K_NAME = 20
+BLOCKING_TOP_K_NAME = 10
 BLOCKING_TOP_K_ADDR = 10
 
 # Minimum cosine similarity threshold during blocking

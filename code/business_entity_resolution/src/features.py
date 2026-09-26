@@ -111,7 +111,7 @@ def extract_features_for_pair(row):
     vals = _compute_pair_features(n1, n2, a1, a2, is_s2)
     return pd.Series(dict(zip(FEATURE_COLUMNS, vals)))
 
-def build_feature_matrix(candidates_df, s1_df, s2_df, s3_df, n_jobs=None, chunk_size=25000):
+def build_feature_matrix(candidates_df, s1_df, s2_df, s3_df, n_jobs=None, chunk_size=50000):
     """
     Takes candidate pairs, joins the text data, and computes features in parallel
     across multiple CPU cores.
