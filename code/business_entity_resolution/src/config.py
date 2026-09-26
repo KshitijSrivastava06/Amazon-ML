@@ -12,11 +12,11 @@ import os
 
 # ─── Paths ────────────────────────────────────────────────────────────
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-DATASET_DIR = os.path.join(BASE_DIR, 'dataset')
+DATASET_DIR = os.environ.get('DATASET_DIR', os.path.join(BASE_DIR, 'dataset'))
 TRAIN_DIR = os.path.join(DATASET_DIR, 'train')
 TEST_DIR = os.path.join(DATASET_DIR, 'test')
-OUTPUT_DIR = os.path.join(BASE_DIR, 'output')
-MODEL_DIR = os.path.join(BASE_DIR, 'code', 'business_entity_resolution', 'models')
+OUTPUT_DIR = os.environ.get('OUTPUT_DIR', os.path.join(BASE_DIR, 'output'))
+MODEL_DIR = os.environ.get('MODEL_DIR', os.path.join(BASE_DIR, 'code', 'business_entity_resolution', 'models'))
 
 # Training files
 TRAIN_S1 = os.path.join(TRAIN_DIR, 'train_source1.tsv')
@@ -32,6 +32,40 @@ TEST_S3 = os.path.join(TEST_DIR, 'test_source3.tsv')
 # Output files
 MATCHING_OUTPUT = os.path.join(OUTPUT_DIR, 'matching_results.tsv')
 CANDIDATE_OUTPUT = os.path.join(OUTPUT_DIR, 'candidate_pairs.tsv')
+
+def update_paths(custom_dataset_dir=None, custom_output_dir=None, custom_model_dir=None):
+    """Dynamically updates paths for cloud environments like Kaggle or Google Colab."""
+    global DATASET_DIR, TRAIN_DIR, TEST_DIR
+    global TRAIN_S1, TRAIN_S2, TRAIN_S3, TRAIN_GT
+    global TEST_S1, TEST_S2, TEST_S3
+    global OUTPUT_DIR, MATCHING_OUTPUT, CANDIDATE_OUTPUT
+    global MODEL_DIR
+
+    if custom_dataset_dir:
+        DATASET_DIR = os.path.abspath(custom_dataset_dir)
+        # Search both root dataset_dir and subdirectories train/ and test/
+        def resolve(subfolder, fname):
+            c1 = os.path.join(DATASET_DIR, subfolder, fname)
+            c2 = os.path.join(DATASET_DIR, fname)
+            return c1 if os.path.exists(c1) else (c2 if os.path.exists(c2) else c1)
+        
+        TRAIN_DIR = os.path.join(DATASET_DIR, 'train')
+        TEST_DIR = os.path.join(DATASET_DIR, 'test')
+        TRAIN_S1 = resolve('train', 'train_source1.tsv')
+        TRAIN_S2 = resolve('train', 'train_source2.tsv')
+        TRAIN_S3 = resolve('train', 'train_source3.tsv')
+        TRAIN_GT = resolve('train', 'train_ground_truth.tsv')
+        TEST_S1 = resolve('test', 'test_source1.tsv')
+        TEST_S2 = resolve('test', 'test_source2.tsv')
+        TEST_S3 = resolve('test', 'test_source3.tsv')
+
+    if custom_output_dir:
+        OUTPUT_DIR = os.path.abspath(custom_output_dir)
+        MATCHING_OUTPUT = os.path.join(OUTPUT_DIR, 'matching_results.tsv')
+        CANDIDATE_OUTPUT = os.path.join(OUTPUT_DIR, 'candidate_pairs.tsv')
+
+    if custom_model_dir:
+        MODEL_DIR = os.path.abspath(custom_model_dir)
 
 # ─── Preprocessing ───────────────────────────────────────────────────
 # Universal business name abbreviation mappings (language-agnostic).

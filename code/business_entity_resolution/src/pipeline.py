@@ -10,21 +10,18 @@ from preprocess import load_and_preprocess
 from blocking import run_blocking
 from features import build_feature_matrix
 from model import prepare_training_data, train_and_tune, save_model
-from config import (
-    TRAIN_S1, TRAIN_S2, TRAIN_S3, TRAIN_GT,
-    TEST_S1, TEST_S2, TEST_S3,
-    MATCHING_OUTPUT, CANDIDATE_OUTPUT, MODEL_DIR
-)
+import config
 
-def run_train():
+def run_train(n_jobs=None):
     """Executes the training pipeline (Phases 1-4)."""
     print("="*50)
     print(" PHASE 1: Data Loading & Preprocessing (TRAIN) ")
     print("="*50)
-    s1 = load_and_preprocess(TRAIN_S1)
-    s2 = load_and_preprocess(TRAIN_S2)
-    s3 = load_and_preprocess(TRAIN_S3)
-    gt = load_and_preprocess(TRAIN_GT, is_ground_truth=True)
+    print(f"Loading data from: {config.DATASET_DIR}")
+    s1 = load_and_preprocess(config.TRAIN_S1)
+    s2 = load_and_preprocess(config.TRAIN_S2)
+    s3 = load_and_preprocess(config.TRAIN_S3)
+    gt = load_and_preprocess(config.TRAIN_GT, is_ground_truth=True)
     
     print("\n" + "="*50)
     print(" PHASE 2: Blocking & Candidate Generation ")
@@ -39,9 +36,9 @@ def run_train():
     candidates_df = pd.DataFrame(rows)
     
     print("\n" + "="*50)
-    print(" PHASE 3: Feature Engineering ")
+    print(" PHASE 3: Feature Engineering (Parallel) ")
     print("="*50)
-    features_df = build_feature_matrix(candidates_df, s1, s2, s3)
+    features_df = build_feature_matrix(candidates_df, s1, s2, s3, n_jobs=n_jobs)
     
     # Free memory
     del s2, s3, candidates_df, candidates_dict
@@ -56,14 +53,15 @@ def run_train():
     save_model(model, best_threshold)
     print("\nTraining Pipeline Complete! Model is ready for inference.")
 
-def run_inference():
+def run_inference(n_jobs=None):
     """Executes the inference pipeline on test data (Phases 5-6)."""
     print("="*50)
     print(" PHASE 5: Data Loading & Preprocessing (TEST) ")
     print("="*50)
-    s1 = load_and_preprocess(TEST_S1)
-    s2 = load_and_preprocess(TEST_S2)
-    s3 = load_and_preprocess(TEST_S3)
+    print(f"Loading test data from: {config.DATASET_DIR}")
+    s1 = load_and_preprocess(config.TEST_S1)
+    s2 = load_and_preprocess(config.TEST_S2)
+    s3 = load_and_preprocess(config.TEST_S3)
     
     print("\n" + "="*50)
     print(" PHASE 5: Blocking (Test Candidates) ")
@@ -74,7 +72,7 @@ def run_inference():
     print(" PHASE 6: Writing candidate_pairs.tsv ")
     print("="*50)
     # 6.2 - Write candidate_pairs.tsv (Format: exactly one row per S1 entity)
-    os.makedirs(os.path.dirname(CANDIDATE_OUTPUT), exist_ok=True)
+    os.makedirs(os.path.dirname(config.CANDIDATE_OUTPUT), exist_ok=True)
     cand_rows = []
     
     all_test_s1_ids = s1['entity_id'].tolist()
@@ -84,29 +82,28 @@ def run_inference():
         cands_str = ",".join(sorted(list(cands)))
         cand_rows.append({'source1_entity_id': s1_id, 'candidate_entity_ids': cands_str})
         
-    pd.DataFrame(cand_rows).to_csv(CANDIDATE_OUTPUT, sep='\t', index=False)
-    print(f"Saved {len(cand_rows)} candidate rows to {CANDIDATE_OUTPUT}")
+    pd.DataFrame(cand_rows).to_csv(config.CANDIDATE_OUTPUT, sep='\t', index=False)
+    print(f"Saved {len(cand_rows)} candidate rows to {config.CANDIDATE_OUTPUT}")
     
     print("\n" + "="*50)
-    print(" PHASE 5: Feature Engineering (Test) ")
+    print(" PHASE 5: Feature Engineering (Test - Parallel) ")
     print("="*50)
-    # Convert dict to df for feature extraction
     rows = []
     for s1_id, match_set in candidates_dict.items():
         for s23_id in match_set:
             rows.append({'source1_entity_id': s1_id, 'candidate_entity_id': s23_id})
     candidates_df = pd.DataFrame(rows)
     
-    features_df = build_feature_matrix(candidates_df, s1, s2, s3)
+    features_df = build_feature_matrix(candidates_df, s1, s2, s3, n_jobs=n_jobs)
     
     print("\n" + "="*50)
     print(" PHASE 5: Inference & Thresholding ")
     print("="*50)
-    model_path = os.path.join(MODEL_DIR, 'lgbm_model.txt')
-    thresh_path = os.path.join(MODEL_DIR, 'best_threshold.txt')
+    model_path = os.path.join(config.MODEL_DIR, 'lgbm_model.txt')
+    thresh_path = os.path.join(config.MODEL_DIR, 'best_threshold.txt')
     
     if not os.path.exists(model_path):
-        raise FileNotFoundError("Model not found. Run --train first.")
+        raise FileNotFoundError(f"Model not found at {model_path}. Run --train first.")
         
     model = lgb.Booster(model_file=model_path)
     with open(thresh_path, 'r') as f:
@@ -129,25 +126,37 @@ def run_inference():
     print(" PHASE 6: Writing matching_results.tsv ")
     print("="*50)
     # 6.1 - Write matching_results.tsv (Format: exactly one row per S1 entity)
+    os.makedirs(os.path.dirname(config.MATCHING_OUTPUT), exist_ok=True)
     match_rows = []
     for s1_id in all_test_s1_ids:
         match_set = final_matches.get(s1_id, set())
         match_str = ",".join(sorted(list(match_set)))
         match_rows.append({'source1_entity_id': s1_id, 'matched_entity_ids': match_str})
         
-    pd.DataFrame(match_rows).to_csv(MATCHING_OUTPUT, sep='\t', index=False)
-    print(f"Saved {len(match_rows)} matching rows to {MATCHING_OUTPUT}")
+    pd.DataFrame(match_rows).to_csv(config.MATCHING_OUTPUT, sep='\t', index=False)
+    print(f"Saved {len(match_rows)} matching rows to {config.MATCHING_OUTPUT}")
     print("\nInference Pipeline Complete!")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Business Entity Resolution Pipeline")
     parser.add_argument('--train', action='store_true', help="Run the training pipeline")
     parser.add_argument('--test', action='store_true', help="Run the inference pipeline on test data")
+    parser.add_argument('--data_dir', type=str, default=None, help="Custom dataset directory (e.g. /kaggle/input/my-dataset)")
+    parser.add_argument('--output_dir', type=str, default=None, help="Custom output directory")
+    parser.add_argument('--model_dir', type=str, default=None, help="Custom model storage directory")
+    parser.add_argument('--n_jobs', type=int, default=None, help="Number of CPU cores for parallel processing (default: all cores)")
     args = parser.parse_args()
     
+    # Apply path updates if custom flags provided
+    config.update_paths(
+        custom_dataset_dir=args.data_dir,
+        custom_output_dir=args.output_dir,
+        custom_model_dir=args.model_dir
+    )
+    
     if args.train:
-        run_train()
+        run_train(n_jobs=args.n_jobs)
     elif args.test:
-        run_inference()
+        run_inference(n_jobs=args.n_jobs)
     else:
-        print("Please specify --train or --test")
+        parser.print_help()

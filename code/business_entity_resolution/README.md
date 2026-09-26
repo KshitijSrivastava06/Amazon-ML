@@ -52,6 +52,20 @@ This will:
 - Run inference using the trained LightGBM model.
 - Generate `output/matching_results.tsv`.
 
+### 3. Training on Cloud (Kaggle / Google Colab)
+
+You can run training in the cloud using parallel processing across all available CPU cores:
+
+```bash
+# Clone the repository
+git clone https://github.com/KshitijSrivastava06/Amazon-ML.git
+cd Amazon-ML/student_resource/code/business_entity_resolution
+pip install -r requirements.txt
+
+# Run training pointing to your uploaded dataset directory:
+python src/pipeline.py --train --data_dir /path/to/dataset --n_jobs 4
+```
+
 ## Validation
 
 Before submission, you can validate the generated output files using the provided validator:
@@ -59,3 +73,4 @@ Before submission, you can validate the generated output files using the provide
 ```bash
 python ../../utils/validate_submission.py --matching ../../output/matching_results.tsv --candidate ../../output/candidate_pairs.tsv --test-dir ../../dataset/test --check-ids
 ```
+
