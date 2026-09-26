@@ -181,8 +181,8 @@ BLOCKING_TOP_K_NAME = 20
 BLOCKING_TOP_K_ADDR = 10
 
 # Minimum cosine similarity threshold during blocking
-BLOCKING_THRESHOLD_NAME = 0.25
-BLOCKING_THRESHOLD_ADDR = 0.20
+BLOCKING_THRESHOLD_NAME = 0.40
+BLOCKING_THRESHOLD_ADDR = 0.30
 
 # ─── LightGBM ────────────────────────────────────────────────────────
 LGBM_PARAMS = {
@@ -200,7 +200,6 @@ LGBM_PARAMS = {
     'n_jobs': -1,
     'random_state': 42,
     'is_unbalance': True,
-    'device': 'gpu',  # Added to enable GPU training
 }
 
 # Negative sampling ratio (negatives per positive) for training

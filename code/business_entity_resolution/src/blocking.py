@@ -22,7 +22,7 @@ except ImportError:
     )
     from preprocess import preprocess_dataframe
 
-def get_top_k_matches(s1_texts, s23_texts, s1_ids, s23_ids, tfidf_params, top_k, threshold, n_jobs=None, batch_size=50000):
+def get_top_k_matches(s1_texts, s23_texts, s1_ids, s23_ids, tfidf_params, top_k, threshold, n_jobs=None, batch_size=100000):
     """
     Computes TF-IDF and finds top K matches using chunked sparse_dot_topn across multiple CPU threads.
     Chunking prevents memory spikes and disk thrashing on large matrices.
