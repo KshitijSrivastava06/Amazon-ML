@@ -26,7 +26,7 @@ def run_train(n_jobs=None):
     print("\n" + "="*50)
     print(" PHASE 2: Blocking & Candidate Generation ")
     print("="*50)
-    candidates_dict = run_blocking(s1, s2, s3)
+    candidates_dict = run_blocking(s1, s2, s3, n_jobs=n_jobs)
     
     # Convert candidates dict to DataFrame for feature engineering
     rows = []
@@ -66,7 +66,7 @@ def run_inference(n_jobs=None):
     print("\n" + "="*50)
     print(" PHASE 5: Blocking (Test Candidates) ")
     print("="*50)
-    candidates_dict = run_blocking(s1, s2, s3)
+    candidates_dict = run_blocking(s1, s2, s3, n_jobs=n_jobs)
     
     print("\n" + "="*50)
     print(" PHASE 6: Writing candidate_pairs.tsv ")

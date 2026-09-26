@@ -9,6 +9,7 @@ DESIGN PRINCIPLE: Country is treated as an OPEN SET of string labels.
 - Abbreviation maps are UNIVERSAL — they apply to all records regardless of country.
 """
 import os
+import numpy as np
 
 # ─── Paths ────────────────────────────────────────────────────────────
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
@@ -163,7 +164,7 @@ TFIDF_NAME_PARAMS = {
     'ngram_range': (3, 5),
     'max_features': 200000,
     'sublinear_tf': True,
-    'dtype': 'float32',
+    'dtype': np.float32,
 }
 
 # TF-IDF parameters for address-based blocking
@@ -172,7 +173,7 @@ TFIDF_ADDR_PARAMS = {
     'ngram_range': (3, 5),
     'max_features': 150000,
     'sublinear_tf': True,
-    'dtype': 'float32',
+    'dtype': np.float32,
 }
 
 # sparse_dot_topn: number of top candidates per S1 entity
