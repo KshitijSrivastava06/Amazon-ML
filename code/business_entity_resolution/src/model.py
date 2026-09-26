@@ -137,27 +137,32 @@ def train_and_tune(train_df, all_s1_entities, ground_truth_df):
     # Build ground truth dictionary for validation entities
     gt_val = ground_truth_df[ground_truth_df['source1_entity_id'].isin(val_s1_entities)]
     true_dict = {}
-    for _, row in gt_val.iterrows():
-        s1 = row['source1_entity_id']
-        s23 = row['matched_entity_ids']
+    for s1, s23 in zip(gt_val['source1_entity_id'].values, gt_val['matched_entity_ids'].values):
         if pd.isna(s23) or s23 == '':
             true_dict[s1] = set()
         else:
-            true_dict[s1] = set(s23.split(','))
+            true_dict[s1] = set(str(s23).split(','))
             
     print("\nTuning threshold for F0.5...")
     best_threshold = 0.5
     best_f05 = 0.0
     
+    # Pre-extract numpy arrays to avoid repeated pandas filtering and groupby overhead
+    val_s1_arr = val_data['source1_entity_id'].values
+    val_c2_arr = val_data['entity_id_2'].values
+    val_prob_arr = val_data['pred_prob'].values
+    
     thresholds = np.arange(0.1, 0.95, 0.05)
     for t in thresholds:
-        # Build prediction dict for this threshold
+        mask = val_prob_arr >= t
         pred_dict = {}
-        # Only keep predictions above threshold
-        matches = val_data[val_data['pred_prob'] >= t]
-        
-        for s1, group in matches.groupby('source1_entity_id'):
-            pred_dict[s1] = set(group['entity_id_2'])
+        if np.any(mask):
+            sub_s1 = val_s1_arr[mask]
+            sub_c2 = val_c2_arr[mask]
+            for s1, c2 in zip(sub_s1, sub_c2):
+                if s1 not in pred_dict:
+                    pred_dict[s1] = set()
+                pred_dict[s1].add(c2)
             
         f05 = calculate_f05_score(true_dict, pred_dict, val_s1_entities)
         print(f"  Threshold {t:.2f} -> F0.5 = {f05:.4f}")

@@ -29,11 +29,12 @@ def run_train(n_jobs=None):
     candidates_dict = run_blocking(s1, s2, s3, n_jobs=n_jobs)
     
     # Convert candidates dict to DataFrame for feature engineering
-    rows = []
+    s1_ids, cand_ids = [], []
     for s1_id, match_set in candidates_dict.items():
-        for s23_id in match_set:
-            rows.append({'source1_entity_id': s1_id, 'candidate_entity_id': s23_id})
-    candidates_df = pd.DataFrame(rows)
+        if match_set:
+            s1_ids.extend([s1_id] * len(match_set))
+            cand_ids.extend(match_set)
+    candidates_df = pd.DataFrame({'source1_entity_id': s1_ids, 'candidate_entity_id': cand_ids})
     
     print("\n" + "="*50)
     print(" PHASE 3: Feature Engineering (Parallel) ")
@@ -88,11 +89,12 @@ def run_inference(n_jobs=None):
     print("\n" + "="*50)
     print(" PHASE 5: Feature Engineering (Test - Parallel) ")
     print("="*50)
-    rows = []
+    s1_ids, cand_ids = [], []
     for s1_id, match_set in candidates_dict.items():
-        for s23_id in match_set:
-            rows.append({'source1_entity_id': s1_id, 'candidate_entity_id': s23_id})
-    candidates_df = pd.DataFrame(rows)
+        if match_set:
+            s1_ids.extend([s1_id] * len(match_set))
+            cand_ids.extend(match_set)
+    candidates_df = pd.DataFrame({'source1_entity_id': s1_ids, 'candidate_entity_id': cand_ids})
     
     features_df = build_feature_matrix(candidates_df, s1, s2, s3, n_jobs=n_jobs)
     
@@ -119,8 +121,8 @@ def run_inference(n_jobs=None):
     
     # Group by S1 entity
     final_matches = defaultdict(set)
-    for _, row in matches.iterrows():
-        final_matches[row['source1_entity_id']].add(row['entity_id_2'])
+    for s1_id, cand_id in zip(matches['source1_entity_id'].values, matches['entity_id_2'].values):
+        final_matches[s1_id].add(cand_id)
         
     print("\n" + "="*50)
     print(" PHASE 6: Writing matching_results.tsv ")
