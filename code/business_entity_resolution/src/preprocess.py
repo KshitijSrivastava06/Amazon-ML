@@ -2,10 +2,18 @@ import pandas as pd
 import re
 from anyascii import anyascii
 import numpy as np
+import os
+import gc
 try:
     from .config import BUSINESS_ABBREVIATION_MAP, ADDRESS_ABBREVIATION_MAP
 except ImportError:
     from config import BUSINESS_ABBREVIATION_MAP, ADDRESS_ABBREVIATION_MAP
+
+# Precompile regexes once for massive speedup
+CLEAN_PUNCT_REGEX = re.compile(r'[^a-z0-9\s]')
+WHITESPACE_REGEX = re.compile(r'\s+')
+COMPILED_BUSINESS_MAP = [(re.compile(abbr, flags=re.IGNORECASE), expansion) for abbr, expansion in BUSINESS_ABBREVIATION_MAP.items()]
+COMPILED_ADDRESS_MAP = [(re.compile(abbr, flags=re.IGNORECASE), expansion) for abbr, expansion in ADDRESS_ABBREVIATION_MAP.items()]
 
 def normalize_text(text, type='name'):
     """
@@ -22,52 +30,61 @@ def normalize_text(text, type='name'):
     text = anyascii(text)
     
     # 3. Replace common separators and punctuation with space (keep alphanumeric)
-    # This also helps split words correctly.
-    text = re.sub(r'[^a-z0-9\s]', ' ', text)
+    text = CLEAN_PUNCT_REGEX.sub(' ', text)
     
-    # 4. Expand abbreviations based on type
+    # 4. Expand abbreviations using precompiled regexes
     if type == 'name':
-        # Replace abbreviations as whole words
-        for abbr, expansion in BUSINESS_ABBREVIATION_MAP.items():
-            text = re.sub(abbr, expansion, text)
+        for pattern, expansion in COMPILED_BUSINESS_MAP:
+            text = pattern.sub(expansion, text)
     elif type == 'address':
-        for abbr, expansion in ADDRESS_ABBREVIATION_MAP.items():
-            text = re.sub(abbr, expansion, text)
+        for pattern, expansion in COMPILED_ADDRESS_MAP:
+            text = pattern.sub(expansion, text)
             
     # 5. Remove extra whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    return text
+    return WHITESPACE_REGEX.sub(' ', text).strip()
 
 def preprocess_dataframe(df):
     """
-    Applies normalization to the business_name and business_address columns.
-    Creates 'name_clean', 'addr_clean', and 'name_addr_clean' columns.
+    Applies memory-efficient normalization to the business_name and business_address columns.
+    Creates 'name_clean', 'addr_clean', and 'name_addr_clean' columns and drops raw text to conserve RAM.
     """
-    # Create copies to avoid SettingWithCopyWarning if working on slices
-    df_clean = df.copy()
+    needed_cols = [c for c in ['entity_id', 'country', 'business_name', 'business_address'] if c in df.columns]
+    df_clean = df[needed_cols].copy()
     
-    # Apply normalization
-    df_clean['name_clean'] = df_clean['business_name'].apply(lambda x: normalize_text(x, 'name'))
-    df_clean['addr_clean'] = df_clean['business_address'].apply(lambda x: normalize_text(x, 'address'))
+    # Process with list comprehension (much faster and lower memory overhead than .apply(lambda))
+    names = df_clean['business_name'].tolist() if 'business_name' in df_clean.columns else []
+    df_clean['name_clean'] = [normalize_text(n, 'name') for n in names]
+    if 'business_name' in df_clean.columns:
+        df_clean.drop(columns=['business_name'], inplace=True)
+        
+    addrs = df_clean['business_address'].tolist() if 'business_address' in df_clean.columns else []
+    df_clean['addr_clean'] = [normalize_text(a, 'address') for a in addrs]
+    if 'business_address' in df_clean.columns:
+        df_clean.drop(columns=['business_address'], inplace=True)
     
-    # Handle missing addresses for concatenation (though normalize_text already returns "")
     df_clean['name_addr_clean'] = df_clean['name_clean'] + " " + df_clean['addr_clean']
     df_clean['name_addr_clean'] = df_clean['name_addr_clean'].str.strip()
     
+    gc.collect()
     return df_clean
 
 def load_and_preprocess(filepath, is_ground_truth=False):
     """
-    Loads a TSV file and applies preprocessing.
+    Loads a TSV file and applies preprocessing with progress prints.
     """
+    fname = os.path.basename(filepath)
+    print(f"  Reading {fname}...")
     df = pd.read_csv(filepath, sep='\t')
     
     if is_ground_truth:
-        # For ground truth, we don't need text normalization
         return df
         
-    return preprocess_dataframe(df)
+    print(f"  Preprocessing {len(df)} records in {fname}...")
+    cleaned_df = preprocess_dataframe(df)
+    del df
+    gc.collect()
+    print(f"  Finished {fname}.")
+    return cleaned_df
 
 if __name__ == '__main__':
     # Simple test
