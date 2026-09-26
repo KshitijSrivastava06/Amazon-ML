@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+
+
+# Datasets and outputs
+dataset/
+output/
+*.tsv
+*.csv
+*.zip
+
+# Models
+code/business_entity_resolution/models/
+
+# OS specific
+.DS_Store
+__MACOSX/
+Thumbs.db
