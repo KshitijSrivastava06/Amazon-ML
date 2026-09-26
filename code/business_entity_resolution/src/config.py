@@ -200,6 +200,7 @@ LGBM_PARAMS = {
     'n_jobs': -1,
     'random_state': 42,
     'is_unbalance': True,
+    'device': 'gpu',  # Added to enable GPU training
 }
 
 # Negative sampling ratio (negatives per positive) for training
