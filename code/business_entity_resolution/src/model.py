@@ -7,9 +7,11 @@ import joblib
 import time
 
 try:
-    from .config import LGBM_PARAMS, NEG_SAMPLE_RATIO, VAL_SPLIT_RATIO, MODEL_DIR, RANDOM_SEED
+    from . import config as _config
+    from .config import LGBM_PARAMS, NEG_SAMPLE_RATIO, VAL_SPLIT_RATIO, RANDOM_SEED
 except ImportError:
-    from config import LGBM_PARAMS, NEG_SAMPLE_RATIO, VAL_SPLIT_RATIO, MODEL_DIR, RANDOM_SEED
+    import config as _config
+    from config import LGBM_PARAMS, NEG_SAMPLE_RATIO, VAL_SPLIT_RATIO, RANDOM_SEED
 
 def calculate_f05_score(true_matches_dict, pred_matches_dict, all_s1_entities):
     """
@@ -179,9 +181,10 @@ def train_and_tune(train_df, all_s1_entities, ground_truth_df):
 
 def save_model(model, threshold):
     """Saves the trained LightGBM model and the tuned threshold."""
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    model_path = os.path.join(MODEL_DIR, 'lgbm_model.txt')
-    thresh_path = os.path.join(MODEL_DIR, 'best_threshold.txt')
+    model_dir = _config.MODEL_DIR  # Read dynamically so update_paths() overrides work
+    os.makedirs(model_dir, exist_ok=True)
+    model_path = os.path.join(model_dir, 'lgbm_model.txt')
+    thresh_path = os.path.join(model_dir, 'best_threshold.txt')
     
     model.save_model(model_path)
     with open(thresh_path, 'w') as f:
