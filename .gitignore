@@ -4,7 +4,9 @@ __pycache__/
 *$py.class
 
 # Virtual Environments
-
+.venv/
+env/
+venv/
 
 # Datasets and outputs
 dataset/
