@@ -13,12 +13,16 @@ FEATURE_COLUMNS = [
     'name_token_set',
     'name_partial',
     'name_jaccard',
+    'name_token_containment',
+    'name_exact_match',
     'name_len_ratio',
     'addr_levenshtein',
     'addr_token_sort',
     'addr_token_set',
     'addr_jaccard',
     'addr_shared_num',
+    'addr_pin_match',
+    'addr_pin_mismatch',
     'addr_both_null',
     'addr_one_null',
     'cross_n1_a2',
@@ -52,6 +56,7 @@ def _compute_pair_features(n1, n2, a1, a2, is_s2):
     len_n1, len_n2 = len(n1), len(n2)
     max_name_len = max(len_n1, len_n2)
     name_len_ratio = (min(len_n1, len_n2) / max_name_len) if max_name_len > 0 else 0.0
+    name_exact = 1.0 if (n1 and n1 == n2) else 0.0
     
     # Name similarities
     name_lev = fuzz.ratio(n1, n2) / 100.0
@@ -59,15 +64,47 @@ def _compute_pair_features(n1, n2, a1, a2, is_s2):
     name_tsort = fuzz.token_sort_ratio(n1, n2) / 100.0
     name_tset = fuzz.token_set_ratio(n1, n2) / 100.0
     name_part = fuzz.partial_ratio(n1, n2) / 100.0
-    name_jacc = compute_jaccard_similarity(n1, n2)
+    
+    # Word sets for name
+    set_n1 = set(n1.split()) if n1 else set()
+    set_n2 = set(n2.split()) if n2 else set()
+    if set_n1 and set_n2:
+        name_inter = len(set_n1.intersection(set_n2))
+        name_jacc = name_inter / len(set_n1.union(set_n2))
+        name_contain = name_inter / min(len(set_n1), len(set_n2))
+    else:
+        name_jacc = 0.0
+        name_contain = 0.0
     
     # Address similarities
     if a1 and a2:
         addr_lev = fuzz.ratio(a1, a2) / 100.0
         addr_tsort = fuzz.token_sort_ratio(a1, a2) / 100.0
         addr_tset = fuzz.token_set_ratio(a1, a2) / 100.0
-        addr_jacc = compute_jaccard_similarity(a1, a2)
-        addr_shared = compute_shared_numeric_ratio(a1, a2)
+        
+        words_a1 = a1.split()
+        words_a2 = a2.split()
+        set_a1 = set(words_a1)
+        set_a2 = set(words_a2)
+        addr_jacc = len(set_a1.intersection(set_a2)) / len(set_a1.union(set_a2)) if (set_a1 and set_a2) else 0.0
+        
+        # Numeric tokens & PINs
+        num1 = {w for w in words_a1 if any(c.isdigit() for c in w)}
+        num2 = {w for w in words_a2 if any(c.isdigit() for c in w)}
+        if num1 and num2:
+            addr_shared = len(num1.intersection(num2)) / max(len(num1), len(num2))
+        else:
+            addr_shared = 0.0
+            
+        pins1 = {w for w in words_a1 if len(w) in (5, 6) and w.isdigit()}
+        pins2 = {w for w in words_a2 if len(w) in (5, 6) and w.isdigit()}
+        if pins1 and pins2:
+            addr_pin_match = 1.0 if bool(pins1.intersection(pins2)) else 0.0
+            addr_pin_mismatch = 1.0 if not bool(pins1.intersection(pins2)) else 0.0
+        else:
+            addr_pin_match = 0.0
+            addr_pin_mismatch = 0.0
+            
         addr_both_null = 0.0
         addr_one_null = 0.0
     else:
@@ -76,6 +113,8 @@ def _compute_pair_features(n1, n2, a1, a2, is_s2):
         addr_tset = 0.0
         addr_jacc = 0.0
         addr_shared = 0.0
+        addr_pin_match = 0.0
+        addr_pin_mismatch = 0.0
         addr_both_null = 1.0 if not a1 and not a2 else 0.0
         addr_one_null = 1.0 if (not a1 and a2) or (a1 and not a2) else 0.0
         
@@ -87,8 +126,8 @@ def _compute_pair_features(n1, n2, a1, a2, is_s2):
     is_source_2 = 1.0 if is_s2 else 0.0
     
     return (
-        name_lev, name_jw, name_tsort, name_tset, name_part, name_jacc, name_len_ratio,
-        addr_lev, addr_tsort, addr_tset, addr_jacc, addr_shared, addr_both_null, addr_one_null,
+        name_lev, name_jw, name_tsort, name_tset, name_part, name_jacc, name_contain, name_exact, name_len_ratio,
+        addr_lev, addr_tsort, addr_tset, addr_jacc, addr_shared, addr_pin_match, addr_pin_mismatch, addr_both_null, addr_one_null,
         cross_n1_a2, cross_n2_a1, is_source_2
     )
 

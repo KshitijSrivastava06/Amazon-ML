@@ -113,7 +113,7 @@ def run_train(n_jobs=None, force=False):
     save_model(model, best_threshold)
     print("\nTraining Pipeline Complete! Model is ready for inference.")
 
-def run_inference(n_jobs=None):
+def run_inference(n_jobs=None, force=False):
     """Executes the inference pipeline on test data (Phases 5-6)."""
     print("="*50)
     print(" PHASE 5: Data Loading & Preprocessing (TEST) ")
@@ -127,14 +127,24 @@ def run_inference(n_jobs=None):
     print(" PHASE 5: Blocking (Test Candidates) ")
     print("="*50)
     os.makedirs(os.path.dirname(config.CANDIDATE_OUTPUT), exist_ok=True)
-    run_blocking_streaming(s1, s2, s3, config.CANDIDATE_OUTPUT, n_jobs=n_jobs)
+    if not force and os.path.exists(config.CANDIDATE_OUTPUT) and os.path.getsize(config.CANDIDATE_OUTPUT) > 0:
+        print(f">>> Using cached test candidate pairs from {config.CANDIDATE_OUTPUT}. Skipping blocking computation.")
+    else:
+        run_blocking_streaming(s1, s2, s3, config.CANDIDATE_OUTPUT, n_jobs=n_jobs)
     
     print("\n" + "="*50)
     print(" PHASE 5: Feature Engineering (Test - Parallel) ")
     print("="*50)
     features_path = config.CHECKPOINT_TEST_FEATURES
-    build_feature_matrix(config.CANDIDATE_OUTPUT, s1, s2, s3, features_path, n_jobs=n_jobs)
+    if not force and os.path.exists(features_path) and os.path.getsize(features_path) > 0:
+        print(f">>> Using cached test feature matrix from {features_path}. Skipping feature computation.")
+    else:
+        build_feature_matrix(config.CANDIDATE_OUTPUT, s1, s2, s3, features_path, n_jobs=n_jobs)
     
+    # Free s2, s3 from memory since only s1 entity IDs are needed for writing final outputs
+    del s2, s3
+    gc.collect()
+
     print("Loading streamed feature matrix into memory for inference...")
     features_df = pd.read_parquet(features_path)
     
@@ -154,12 +164,21 @@ def run_inference(n_jobs=None):
     print(f"Loaded model. Using F0.5 tuned threshold: {threshold:.2f}")
     
     feature_cols = FEATURE_COLUMNS
-    assert len(feature_cols) == 17, "Expected exactly 17 features"
+    assert len(feature_cols) == 21, "Expected exactly 21 features"
     assert 'country' not in feature_cols, "Country must not be in features"
     
     # Predict
     features_df['pred_prob'] = model.predict(features_df[feature_cols])
     matches = features_df[features_df['pred_prob'] >= threshold]
+    print(f"Initial candidate matches above threshold ({threshold:.2f}): {len(matches):,}")
+    
+    # Post-Processing: N-to-1 Conflict Resolution
+    # Real-world S2/S3 entities map to at most one true S1 entity.
+    # If multiple S1 entities claim the same candidate ID (entity_id_2),
+    # assign the candidate exclusively to the S1 entity with the highest prediction probability.
+    matches = matches.sort_values(by='pred_prob', ascending=False)
+    matches = matches.drop_duplicates(subset=['entity_id_2'], keep='first')
+    print(f"Matches after N-to-1 Conflict Resolution: {len(matches):,}")
     
     # Group by S1 entity
     final_matches = defaultdict(set)
@@ -206,6 +225,6 @@ if __name__ == '__main__':
     if args.train:
         run_train(n_jobs=args.n_jobs, force=args.force)
     elif args.test:
-        run_inference(n_jobs=args.n_jobs)
+        run_inference(n_jobs=args.n_jobs, force=args.force)
     else:
         parser.print_help()

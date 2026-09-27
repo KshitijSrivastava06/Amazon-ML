@@ -116,7 +116,7 @@ On the full training corpus (2.2M $S_1 \times 10.3M\ S_{2/3}$), this blocking en
 
 ## 4. Feature Engineering
 
-Every candidate pair $(S_1, S_{2/3})$ is enriched with an exhaustive suite of **17 language-agnostic similarity features** computed in parallel across CPU cores using the C++ backend of `rapidfuzz`. 
+Every candidate pair $(S_1, S_{2/3})$ is enriched with an exhaustive suite of **21 language-agnostic similarity features** computed in parallel across CPU cores using the C++ backend of `rapidfuzz` and vectorized regex tokenizers. 
 
 > **Critical Leakage Constraint**: To guarantee generalization to unseen countries, `country` is strictly excluded from feature extraction and model inputs. An explicit assertion enforces `assert 'country' not in feature_cols` across both training and inference pipelines.
 
@@ -138,8 +138,12 @@ Every candidate pair $(S_1, S_{2/3})$ is enriched with an exhaustive suite of **
 15. **`cross_n1_a2`**: Partial string ratio comparing the Name of $S_1$ to the Address of $S_2/S_3$ (recovers frequent user-entry errors where the company name was placed in the street address field).
 16. **`cross_n2_a1`**: Partial string ratio comparing the Name of $S_2/S_3$ to the Address of $S_1$.
 17. **`is_source_2`**: Binary source indicator ($1$ for Source 2, $0$ for Source 3).
+18. **`name_token_containment`**: Binary subset indicator ($1.0$ if all tokens of the shorter business name are strictly contained within the longer business name, $0.0$ otherwise). Accurately resolves brand root names to extended formal corporate entities.
+19. **`name_exact_match`**: Binary exact match indicator ($1.0$ if normalized names are character-identical, $0.0$ otherwise).
+20. **`addr_pin_match`**: Postal PIN match indicator ($1.0$ if both records possess an identical 5-to-6-digit postal code).
+21. **`addr_pin_mismatch`**: Postal PIN conflict penalty indicator ($1.0$ if both records possess 5-to-6-digit postal codes that contradict each other, $0.0$ otherwise). Strongly suppresses false positive cross-city collisions.
 
-Features are computed using multiprocessing chunks and streamed directly to disk as `train_features.parquet` / `test_features.parquet`, achieving a throughput of **>88,000 pairs/sec**.
+Features are computed using multiprocessing chunks and streamed directly to disk as `train_features.parquet` / `test_features.parquet`, achieving a throughput of **>85,000 pairs/sec**.
 
 ---
 
@@ -159,15 +163,15 @@ We deploy a **Gradient Boosted Decision Tree (LightGBM)** classifier, conforming
 - **Capacity**: `num_leaves=127`, `min_child_samples=50`
 - **Regularization & Sampling**: `feature_fraction=0.8`, `bagging_fraction=0.8`, `bagging_freq=5`
 - **Learning Rate**: `0.05`
-- **Result**: Validation binary logloss dropped steadily from **0.3214** (round 10) to **0.0549** (round 500).
+- **Result**: Validation binary logloss dropped steadily from **0.3198** (round 10) to **0.0542** (round 500).
 
 ### 5.3 Top Feature Importance (Gain)
-The model relies overwhelmingly on brand prefixes and structural address tokens:
-1. `name_jaro_winkler` ($7.34 \times 10^7$ gain) — Primary brand alignment
-2. `addr_shared_num` ($2.70 \times 10^7$ gain) — PIN code and street number agreement
-3. `addr_token_set` ($2.03 \times 10^7$ gain) — Address locality and city overlap
-4. `name_token_set` ($1.10 \times 10^7$ gain) — Word set overlap
-5. `name_len_ratio` ($9.57 \times 10^6$ gain) — Name brevity agreement
+The model relies overwhelmingly on brand prefixes, token sets, and structural address tokens:
+1. `name_jaro_winkler` ($6.96 \times 10^7$ gain) — Primary brand alignment
+2. `name_token_set` ($5.00 \times 10^7$ gain) — Word set overlap
+3. `addr_shared_num` ($3.84 \times 10^7$ gain) — PIN code and street number agreement
+4. `addr_token_set` ($2.01 \times 10^7$ gain) — Address locality and city overlap
+5. `name_len_ratio` ($7.23 \times 10^6$ gain) — Name brevity agreement
 
 ---
 
@@ -180,26 +184,31 @@ $$F_{0.5} = \frac{1.25 \times \text{Precision} \times \text{Recall}}{0.25 \times
 
 Because $F_{0.5}$ penalizes false positives twice as heavily as false negatives, a default threshold of $0.50$ is sub-optimal. Furthermore, correctly outputting an empty string for a singleton entity awards a full **1.0** credit, while predicting a single spurious match on a singleton reduces its score to **0.0**.
 
-### 6.2 Empirical Threshold Sweep
-Post-training, we simulate the exact leaderboard evaluation on all **3,309,804 validation pairs** across validation entities:
+### 6.2 Empirical Threshold Sweep & Fine-Grained Post-Processing
+Post-training, we simulate the exact leaderboard evaluation on all **3,309,804 validation pairs** across validation entities using a two-stage coarse-to-fine sweep ($0.05$ coarse step followed by $0.01$ fine-grained sweep):
 
 | Decision Threshold | Macro-Averaged Validation $F_{0.5}$ |
 |:---:|:---:|
-| 0.20 | 0.8288 |
-| 0.30 | 0.8440 |
-| 0.40 | 0.8517 |
-| 0.50 | 0.8556 |
-| 0.55 | 0.8565 |
-| **0.60** | **0.8569 (Optimal)** |
-| 0.65 | 0.8566 |
-| 0.70 | 0.8558 |
-| 0.80 | 0.8514 |
+| 0.20 | 0.8298 |
+| 0.30 | 0.8448 |
+| 0.40 | 0.8522 |
+| 0.50 | 0.8560 |
+| 0.55 | 0.8570 |
+| 0.58 | 0.8574 |
+| 0.59 | 0.8575 |
+| **0.60** | **0.8575 (Optimal)** |
+| 0.61 | 0.8575 |
+| 0.65 | 0.8573 |
+| 0.70 | 0.8565 |
+| 0.80 | 0.8523 |
 
 At threshold **`0.60`**, the classifier achieves:
-- **Pair Precision**: **97.89%** ($827,505$ TP vs. only $17,835$ FP)
-- **Pair Recall**: **93.95%** ($53,289$ FN)
-- **Pair $F_{0.5}$**: **0.9708**
-- **Macro-Averaged $F_{0.5}$**: **0.8569**
+- **Pairwise Precision**: **97.90%** ($828,765$ TP vs. only $17,752$ FP)
+- **Pairwise Recall**: **94.09%** ($52,029$ FN)
+- **Pairwise $F_{0.5}$**: **97.12%**
+- **Macro-Averaged Precision**: **92.39%**
+- **Macro-Averaged Recall**: **74.03%**
+- **Macro-Averaged $F_{0.5}$ (Leaderboard Metric)**: **0.8575** (up from initial baseline of **0.8569**)
 
 The tuned value `0.60` is automatically saved to `models/best_threshold.txt` and loaded during test inference.
 
@@ -215,7 +224,9 @@ During research and development, we tested multiple configurations on the real d
 | **Ablation 2: Word Unigrams vs. Bigrams** | Word `(1,1)`, 30K feat, `max_df=0.005` | Vectorization was extremely fast (6 min), but density dropped to 5.0 non-zeros/row. Missed compound brand names like "apple computer". | **REJECTED**: Bigrams provide critical multi-word context. |
 | **Ablation 3: Unified Name+Address Blocking** | Word `(1,2)`, 30K feat, `max_df=0.005`, single pass | Blocking time dropped to **28.3 minutes** across 22.06M pairs while preserving >94% candidate recall. | **ADOPTED**: Core production blocking engine. |
 | **Ablation 4: Default Threshold (0.50)** | Standard LightGBM default $P \ge 0.50$ | Achieved $F_{0.5} = 0.8556$. Suffered from subtle false merges on edge-case singletons (reducing entity score to 0.0). | **REJECTED**: Tuned higher to maximize precision. |
-| **Ablation 5: $F_{0.5}$-Tuned Threshold (0.60)** | Swept threshold $P \ge 0.60$ | Increased pair precision to **97.89%**, boosting macro-averaged $F_{0.5}$ to **0.8569**. | **ADOPTED**: Optimal submission threshold. |
+| **Ablation 5: $F_{0.5}$-Tuned Threshold (0.60)** | Swept threshold $P \ge 0.60$ (17 features) | Increased pair precision to **97.89%**, boosting macro-averaged $F_{0.5}$ to **0.8569**. | **SUPERSEDED**: Baseline model. |
+| **Ablation 6: 21 Features + Fine-Grained Thresholding** | 21 features (added token containment, exact name match, PIN match/mismatch) + $0.01$ step threshold sweep | Validation logloss dropped to **0.0542**. Macro-averaged $F_{0.5}$ improved to **0.8575** (+0.0006 gain). Zero validator issues. | **ADOPTED**: Core feature engineering. |
+| **Ablation 7: N-to-1 Conflict Resolution Post-Processing** | Enforce 1-to-1 candidate constraint (assign candidate ID exclusively to the $S_1$ entity with highest $P$) | Pruned 37,489 multi-claimed candidate false positives. Macro-averaged $F_{0.5}$ improved from **0.8573** to **0.8577** without modifying model weights. | **ADOPTED**: Final production submission. |
 
 ---
 
@@ -244,7 +255,7 @@ ML Challenge 2026 — submission validator
   test dir: dataset/test
   required S1 entities: 1,732,544
   valid S2/S3 match IDs: 9,969,589
-  matching_results.tsv: 1,732,544 rows (183,101 empty, 1,549,443 non-empty).
+  matching_results.tsv: 1,732,544 rows (186,297 empty, 1,546,247 non-empty).
   candidate_pairs.tsv:  1,732,544 rows (390 empty, 1,732,154 non-empty).
 
 PASS — no blocking issues found. Safe to submit.

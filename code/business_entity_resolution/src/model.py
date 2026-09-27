@@ -114,7 +114,7 @@ def train_and_tune(train_df, all_s1_entities, ground_truth_df):
     
     # Define features (explicit list from features.py)
     feature_cols = FEATURE_COLUMNS
-    assert len(feature_cols) == 17, "Expected exactly 17 features"
+    assert len(feature_cols) == 21, "Expected exactly 21 features"
     assert 'country' not in feature_cols, "Country must not be in features"
     
     print(f"  Train: {len(train_data)} pairs | Val: {len(val_data)} pairs")
@@ -182,9 +182,10 @@ def train_and_tune(train_df, all_s1_entities, ground_truth_df):
     
     thresholds = np.arange(0.1, 0.95, 0.05)
     use_tqdm = sys.stdout.isatty()
-    iterator = tqdm(thresholds, desc="Tuning F0.5 threshold") if use_tqdm else thresholds
+    iterator = tqdm(thresholds, desc="Tuning F0.5 threshold (coarse)") if use_tqdm else thresholds
     for t in iterator:
-        mask = val_prob_arr >= t
+        t_round = round(float(t), 2)
+        mask = val_prob_arr >= t_round
         pred_dict = {}
         if np.any(mask):
             sub_s1 = val_s1_arr[mask]
@@ -195,11 +196,37 @@ def train_and_tune(train_df, all_s1_entities, ground_truth_df):
                 pred_dict[s1].add(c2)
             
         f05 = calculate_f05_score(true_dict, pred_dict, val_s1_entities)
-        print(f"  Threshold {t:.2f} -> F0.5 = {f05:.4f}")
+        print(f"  Coarse Threshold {t_round:.2f} -> F0.5 = {f05:.4f}")
         
         if f05 > best_f05:
             best_f05 = f05
-            best_threshold = t
+            best_threshold = t_round
+            
+    # Fine grid tuning around coarse best threshold (step 0.01)
+    fine_low = max(0.1, best_threshold - 0.04)
+    fine_high = min(0.95, best_threshold + 0.05)
+    fine_thresholds = np.arange(fine_low, fine_high, 0.01)
+    print(f"\nFine-tuning threshold around {best_threshold:.2f} (step 0.01)...")
+    for t in fine_thresholds:
+        t_round = round(float(t), 2)
+        if abs(t_round - best_threshold) < 1e-4:
+            continue
+        mask = val_prob_arr >= t_round
+        pred_dict = {}
+        if np.any(mask):
+            sub_s1 = val_s1_arr[mask]
+            sub_c2 = val_c2_arr[mask]
+            for s1, c2 in zip(sub_s1, sub_c2):
+                if s1 not in pred_dict:
+                    pred_dict[s1] = set()
+                pred_dict[s1].add(c2)
+            
+        f05 = calculate_f05_score(true_dict, pred_dict, val_s1_entities)
+        print(f"  Fine Threshold {t_round:.2f} -> F0.5 = {f05:.4f}")
+        
+        if f05 > best_f05:
+            best_f05 = f05
+            best_threshold = t_round
             
     print(f"\n=> Best Threshold: {best_threshold:.2f} (Val F0.5: {best_f05:.4f})")
     

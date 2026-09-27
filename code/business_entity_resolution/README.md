@@ -89,7 +89,8 @@ python -u src/pipeline.py --test
 2. Runs blocking to extract test candidates and writes `output/candidate_pairs.tsv` (1,732,544 rows).
 3. Streams parallel feature extraction to `checkpoints/test_features.parquet`.
 4. Applies the trained LightGBM model using the tuned threshold (`0.60`).
-5. Generates the final submission file `output/matching_results.tsv` (1,732,544 rows).
+5. Applies N-to-1 Conflict Resolution post-processing (resolving multi-claimed candidate entities to the highest-confidence $S_1$ match, eliminating false positives on singletons).
+6. Generates the final submission file `output/matching_results.tsv` (1,732,544 rows).
 
 ---
 
@@ -106,7 +107,7 @@ ML Challenge 2026 — submission validator
   test dir: dataset/test
   required S1 entities: 1732544
   valid S2/S3 match IDs: 9969589
-  matching_results.tsv: 1732544 rows (183101 empty, 1549443 non-empty).
+  matching_results.tsv: 1732544 rows (186297 empty, 1546247 non-empty).
   candidate_pairs.tsv: 1732544 rows (390 empty, 1732154 non-empty).
 
 PASS — no blocking issues found. Safe to submit.
@@ -121,4 +122,4 @@ PASS — no blocking issues found. Safe to submit.
 - **Training Time**: 18.75M training pairs, 500 trees in **~3.5 minutes**.
 - **Validation Precision**: **97.89%** pair precision.
 - **Validation Recall**: **93.95%** pair recall.
-- **Validation $F_{0.5}$**: **0.8569** (85.69% macro-averaged across all entities including singletons).
+- **Validation $F_{0.5}$**: **0.8577** (85.77% macro-averaged across all entities including singletons with N-to-1 conflict resolution).
