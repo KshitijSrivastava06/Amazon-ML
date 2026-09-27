@@ -222,9 +222,21 @@ if __name__ == '__main__':
     })
     cands = pd.DataFrame({
         'source1_entity_id': ['S1-1', 'S1-2'],
-        'candidate_entity_id': ['S2-10', 'S3-20']
+        'candidate_entity_ids': ['S2-10', 'S3-20']
     })
     
-    out = build_feature_matrix(cands, s1_test, s2_test, s3_test, n_jobs=2)
-    print("\nResult:")
-    print(out[['source1_entity_id', 'entity_id_2', 'name_levenshtein', 'addr_levenshtein', 'is_source_2']])
+    test_cand_path = 'temp_test_cands.tsv'
+    test_feat_path = 'temp_test_features.parquet'
+    cands.to_csv(test_cand_path, sep='\t', index=False)
+    
+    try:
+        out_path = build_feature_matrix(test_cand_path, s1_test, s2_test, s3_test, test_feat_path, n_jobs=2)
+        out_df = pd.read_parquet(out_path)
+        print("\nResult:")
+        print(out_df[['source1_entity_id', 'entity_id_2', 'name_levenshtein', 'addr_levenshtein', 'is_source_2']])
+    finally:
+        if os.path.exists(test_cand_path):
+            os.remove(test_cand_path)
+        if os.path.exists(test_feat_path):
+            os.remove(test_feat_path)
+        print("Cleaned up temporary test files.")

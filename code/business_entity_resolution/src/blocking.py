@@ -7,23 +7,24 @@ from sparse_dot_topn import sp_matmul_topn
 import gc
 from collections import defaultdict
 import sys
+from tqdm import tqdm
 
 try:
     from .config import (
-        TFIDF_NAME_PARAMS, TFIDF_ADDR_PARAMS, 
-        BLOCKING_TOP_K_NAME, BLOCKING_TOP_K_ADDR,
-        BLOCKING_THRESHOLD_NAME, BLOCKING_THRESHOLD_ADDR
+        TFIDF_BLOCKING_PARAMS,
+        BLOCKING_TOP_K,
+        BLOCKING_THRESHOLD
     )
     from .preprocess import preprocess_dataframe
 except ImportError:
     from config import (
-        TFIDF_NAME_PARAMS, TFIDF_ADDR_PARAMS, 
-        BLOCKING_TOP_K_NAME, BLOCKING_TOP_K_ADDR,
-        BLOCKING_THRESHOLD_NAME, BLOCKING_THRESHOLD_ADDR
+        TFIDF_BLOCKING_PARAMS,
+        BLOCKING_TOP_K,
+        BLOCKING_THRESHOLD
     )
     from preprocess import preprocess_dataframe
 
-def get_top_k_matches(s1_texts, s23_texts, s1_ids, s23_ids, tfidf_params, top_k, threshold, n_jobs=None, batch_size=100000):
+def get_top_k_matches(s1_texts, s23_texts, s1_ids, s23_ids, tfidf_params, top_k, threshold, n_jobs=None, batch_size=200000):
     """
     Computes TF-IDF and finds top K matches using chunked sparse_dot_topn across multiple CPU threads.
     Chunking prevents memory spikes and disk thrashing on large matrices.
@@ -34,7 +35,13 @@ def get_top_k_matches(s1_texts, s23_texts, s1_ids, s23_ids, tfidf_params, top_k,
     print(f"    Vectorizing {len(s1_texts)} S1 and {len(s23_texts)} S2/S3 records...")
     
     # Fit on S23 (larger corpus) and transform both — avoids concatenating 5M strings
-    vectorizer = TfidfVectorizer(**tfidf_params)
+    params = dict(tfidf_params)
+    if isinstance(params.get('max_df'), float) and params['max_df'] < 1.0:
+        if len(s23_texts) * params['max_df'] < params.get('min_df', 1):
+            params['min_df'] = 1
+            params['max_df'] = 1.0
+            
+    vectorizer = TfidfVectorizer(**params)
     matrix_s23 = vectorizer.fit_transform(s23_texts)
     matrix_s1 = vectorizer.transform(s1_texts)
     del vectorizer
@@ -98,7 +105,7 @@ def get_top_k_matches(s1_texts, s23_texts, s1_ids, s23_ids, tfidf_params, top_k,
 
 def generate_candidates_for_country(s1_df, s23_df, country_name, n_jobs=None):
     """
-    Generates candidates for a specific country partition using both Name and Address TF-IDF.
+    Generates candidates for a specific country partition using unified Name+Address TF-IDF.
     """
     print(f"\n--- Processing Country Partition: {country_name} ---")
     print(f"  S1 entities: {len(s1_df)}, S2/S3 entities: {len(s23_df)}")
@@ -110,50 +117,22 @@ def generate_candidates_for_country(s1_df, s23_df, country_name, n_jobs=None):
         print("  No S2/S3 candidates available for this country.")
         return defaultdict(set)
         
-    all_candidates = defaultdict(set)
+    # Combine name and address into a single blocking text field
+    print("  [Step 1/1] Unified Name+Address blocking")
+    s1_text = (s1_df['name_clean'].fillna('') + ' ' + s1_df['addr_clean'].fillna('')).str.strip()
+    s23_text = (s23_df['name_clean'].fillna('') + ' ' + s23_df['addr_clean'].fillna('')).str.strip()
     
-    # --- 1. Name-based Blocking ---
-    print("  [Step 1/2] Name-based blocking")
-    s1_names = s1_df['name_clean'].replace("", "emptyname")
-    s23_names = s23_df['name_clean'].replace("", "emptyname")
-    
-    name_candidates = get_top_k_matches(
-        s1_names, s23_names, 
+    all_candidates = get_top_k_matches(
+        s1_text, s23_text, 
         s1_df['entity_id'], s23_df['entity_id'], 
-        TFIDF_NAME_PARAMS, BLOCKING_TOP_K_NAME, BLOCKING_THRESHOLD_NAME,
-        n_jobs=n_jobs
+        TFIDF_BLOCKING_PARAMS, BLOCKING_TOP_K, BLOCKING_THRESHOLD,
+        n_jobs=n_jobs, batch_size=200000
     )
-    
-    for k, v in name_candidates.items():
-        all_candidates[k].update(v)
-        
-    del name_candidates
-    gc.collect()
-
-    # --- 2. Address-based Blocking ---
-    print("  [Step 2/2] Address-based blocking")
-    s1_addrs = s1_df['addr_clean'].replace("", "emptyaddr")
-    s23_addrs = s23_df['addr_clean'].replace("", "emptyaddr")
-    
-    addr_candidates = get_top_k_matches(
-        s1_addrs, s23_addrs, 
-        s1_df['entity_id'], s23_df['entity_id'], 
-        TFIDF_ADDR_PARAMS, BLOCKING_TOP_K_ADDR, BLOCKING_THRESHOLD_ADDR,
-        n_jobs=n_jobs
-    )
-    
-    for k, v in addr_candidates.items():
-        all_candidates[k].update(v)
-        
-    del addr_candidates
-    gc.collect()
     
     total_pairs = sum(len(v) for v in all_candidates.values())
     print(f"  Finished {country_name}: Generated {total_pairs} candidate pairs.")
     
     return all_candidates
-
-from tqdm import tqdm
 
 def run_blocking_streaming(s1_df, s2_df, s3_df, output_path, n_jobs=None):
     """
@@ -175,7 +154,7 @@ def run_blocking_streaming(s1_df, s2_df, s3_df, output_path, n_jobs=None):
     first = True
     total_pairs = 0
     
-    use_tqdm = sys.stdout.isatty() if 'sys' in globals() else True
+    use_tqdm = sys.stdout.isatty()
     iterator = tqdm(all_countries, desc="Countries processed", unit="country") if use_tqdm else all_countries
     
     for country in iterator:
@@ -233,5 +212,10 @@ if __name__ == '__main__':
         'country': ['US']
     })
     
-    run_blocking_streaming(s1, s2, s3, 'test_candidate_pairs.tsv', n_jobs=2)
-    print("Test Blocking Result saved to test_candidate_pairs.tsv")
+    test_out = 'test_candidate_pairs.tsv'
+    run_blocking_streaming(s1, s2, s3, test_out, n_jobs=2)
+    print("Test Blocking Result saved to", test_out)
+    if os.path.exists(test_out):
+        print(pd.read_csv(test_out, sep='\t'))
+        os.remove(test_out)
+        print("Cleaned up test output file.")

@@ -31,7 +31,9 @@ CHECKPOINT_TRAIN_S1 = os.path.join(CHECKPOINT_DIR, 'train_s1_clean.parquet')
 CHECKPOINT_TRAIN_S2 = os.path.join(CHECKPOINT_DIR, 'train_s2_clean.parquet')
 CHECKPOINT_TRAIN_S3 = os.path.join(CHECKPOINT_DIR, 'train_s3_clean.parquet')
 CHECKPOINT_TRAIN_CANDIDATES = os.path.join(CHECKPOINT_DIR, 'train_candidates.parquet')
+CHECKPOINT_TRAIN_CANDIDATES_TSV = os.path.join(CHECKPOINT_DIR, 'train_candidates.tsv')
 CHECKPOINT_TRAIN_FEATURES = os.path.join(CHECKPOINT_DIR, 'train_features.parquet')
+CHECKPOINT_TEST_FEATURES = os.path.join(CHECKPOINT_DIR, 'test_features.parquet')
 
 # Test files
 TEST_S1 = os.path.join(TEST_DIR, 'test_source1.tsv')
@@ -50,7 +52,8 @@ def update_paths(custom_dataset_dir=None, custom_output_dir=None, custom_model_d
     global OUTPUT_DIR, MATCHING_OUTPUT, CANDIDATE_OUTPUT
     global MODEL_DIR
     global CHECKPOINT_DIR, CHECKPOINT_TRAIN_S1, CHECKPOINT_TRAIN_S2, CHECKPOINT_TRAIN_S3
-    global CHECKPOINT_TRAIN_CANDIDATES, CHECKPOINT_TRAIN_FEATURES
+    global CHECKPOINT_TRAIN_CANDIDATES, CHECKPOINT_TRAIN_CANDIDATES_TSV, CHECKPOINT_TRAIN_FEATURES
+    global CHECKPOINT_TEST_FEATURES
 
     if custom_dataset_dir:
         DATASET_DIR = os.path.abspath(custom_dataset_dir)
@@ -84,7 +87,9 @@ def update_paths(custom_dataset_dir=None, custom_output_dir=None, custom_model_d
         CHECKPOINT_TRAIN_S2 = os.path.join(CHECKPOINT_DIR, 'train_s2_clean.parquet')
         CHECKPOINT_TRAIN_S3 = os.path.join(CHECKPOINT_DIR, 'train_s3_clean.parquet')
         CHECKPOINT_TRAIN_CANDIDATES = os.path.join(CHECKPOINT_DIR, 'train_candidates.parquet')
+        CHECKPOINT_TRAIN_CANDIDATES_TSV = os.path.join(CHECKPOINT_DIR, 'train_candidates.tsv')
         CHECKPOINT_TRAIN_FEATURES = os.path.join(CHECKPOINT_DIR, 'train_features.parquet')
+        CHECKPOINT_TEST_FEATURES = os.path.join(CHECKPOINT_DIR, 'test_features.parquet')
 
 # ─── Preprocessing ───────────────────────────────────────────────────
 # Universal business name abbreviation mappings (language-agnostic).
@@ -176,35 +181,22 @@ ADDRESS_ABBREVIATION_MAP = {
 }
 
 # ─── Blocking / Candidate Generation ─────────────────────────────────
-# TF-IDF parameters for name-based blocking
-TFIDF_NAME_PARAMS = {
-    'analyzer': 'char_wb',
-    'ngram_range': (3, 5),
-    'max_features': 100000,
-    'min_df': 3,          # Drop n-grams appearing in fewer than 3 docs (noise)
-    'max_df': 0.3,        # Drop n-grams appearing in >30% of docs (stop-n-grams)
-    'sublinear_tf': True,
-    'dtype': np.float32,
-}
-
-# TF-IDF parameters for address-based blocking
-TFIDF_ADDR_PARAMS = {
-    'analyzer': 'char_wb',
-    'ngram_range': (3, 5),
-    'max_features': 80000,
-    'min_df': 3,          # Drop n-grams appearing in fewer than 3 docs (noise)
-    'max_df': 0.3,        # Drop n-grams appearing in >30% of docs (stop-n-grams)
+# TF-IDF parameters for unified name+address blocking (word-level n-grams)
+TFIDF_BLOCKING_PARAMS = {
+    'analyzer': 'word',
+    'ngram_range': (1, 2),
+    'max_features': 30000,
+    'min_df': 3,          # Drop terms appearing in fewer than 3 docs (noise)
+    'max_df': 0.005,      # Drop terms appearing in >0.5% of docs to break mega-hubs
     'sublinear_tf': True,
     'dtype': np.float32,
 }
 
 # sparse_dot_topn: number of top candidates per S1 entity
-BLOCKING_TOP_K_NAME = 10
-BLOCKING_TOP_K_ADDR = 10
+BLOCKING_TOP_K = 10
 
 # Minimum cosine similarity threshold during blocking
-BLOCKING_THRESHOLD_NAME = 0.40
-BLOCKING_THRESHOLD_ADDR = 0.30
+BLOCKING_THRESHOLD = 0.30
 
 # ─── LightGBM ────────────────────────────────────────────────────────
 LGBM_PARAMS = {

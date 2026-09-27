@@ -146,6 +146,7 @@ def train_and_tune(train_df, all_s1_entities, ground_truth_df):
     model = lgb.train(
         LGBM_PARAMS,
         lgb_train,
+        num_boost_round=LGBM_PARAMS.get('n_estimators', 500),
         valid_sets=[lgb_val],
         callbacks=callbacks
     )
@@ -161,10 +162,14 @@ def train_and_tune(train_df, all_s1_entities, ground_truth_df):
     gt_val = ground_truth_df[ground_truth_df['source1_entity_id'].isin(val_s1_entities)]
     true_dict = {}
     for s1, s23 in zip(gt_val['source1_entity_id'].values, gt_val['matched_entity_ids'].values):
-        if pd.isna(s23) or s23 == '':
+        if s23 is None:
+            true_dict[s1] = set()
+        elif isinstance(s23, (list, np.ndarray, set)):
+            true_dict[s1] = {str(x).strip() for x in s23 if x and not pd.isna(x) and str(x).strip() != ''}
+        elif pd.isna(s23) or str(s23).strip() == '':
             true_dict[s1] = set()
         else:
-            true_dict[s1] = set(str(s23).split(','))
+            true_dict[s1] = {x.strip() for x in str(s23).split(',') if x.strip()}
             
     print("\nTuning threshold for F0.5...")
     best_threshold = 0.5

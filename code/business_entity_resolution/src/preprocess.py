@@ -46,7 +46,7 @@ def normalize_text(text, type='name'):
 def preprocess_dataframe(df):
     """
     Applies memory-efficient normalization to the business_name and business_address columns.
-    Creates 'name_clean', 'addr_clean', and 'name_addr_clean' columns and drops raw text to conserve RAM.
+    Creates 'name_clean' and 'addr_clean' columns and drops raw text to conserve RAM.
     """
     needed_cols = [c for c in ['entity_id', 'country', 'business_name', 'business_address'] if c in df.columns]
     df_clean = df[needed_cols].copy()
@@ -92,6 +92,9 @@ def load_and_preprocess(filepath, is_ground_truth=False):
     return cleaned_df
 
 if __name__ == '__main__':
+    import sys
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
     # Simple test
     test_cases = [
         ("राम मार्केटिंग प्राइवेट लिमिटेड", "name"), # Hindi: Ram Marketing Private Limited

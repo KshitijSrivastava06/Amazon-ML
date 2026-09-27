@@ -9,7 +9,7 @@ from collections import defaultdict
 
 from preprocess import load_and_preprocess
 from blocking import run_blocking_streaming
-from features import build_feature_matrix
+from features import build_feature_matrix, FEATURE_COLUMNS
 from model import prepare_training_data, train_and_tune, save_model
 import config
 
@@ -79,7 +79,7 @@ def run_train(n_jobs=None, force=False):
         print("\n" + "="*50)
         print(" PHASE 2: Blocking & Candidate Generation ")
         print("="*50)
-        candidates_path = config.CHECKPOINT_TRAIN_CANDIDATES.replace('.parquet', '.tsv')
+        candidates_path = config.CHECKPOINT_TRAIN_CANDIDATES_TSV
         if not force and os.path.exists(candidates_path):
             print(">>> Using cached candidate pairs from checkpoint. Skipping blocking computation.")
         else:
@@ -132,7 +132,7 @@ def run_inference(n_jobs=None):
     print("\n" + "="*50)
     print(" PHASE 5: Feature Engineering (Test - Parallel) ")
     print("="*50)
-    features_path = config.MATCHING_OUTPUT.replace('.tsv', '_features.parquet')
+    features_path = config.CHECKPOINT_TEST_FEATURES
     build_feature_matrix(config.CANDIDATE_OUTPUT, s1, s2, s3, features_path, n_jobs=n_jobs)
     
     print("Loading streamed feature matrix into memory for inference...")
@@ -153,7 +153,9 @@ def run_inference(n_jobs=None):
         
     print(f"Loaded model. Using F0.5 tuned threshold: {threshold:.2f}")
     
-    feature_cols = [c for c in features_df.columns if c not in ['source1_entity_id', 'entity_id_2']]
+    feature_cols = FEATURE_COLUMNS
+    assert len(feature_cols) == 17, "Expected exactly 17 features"
+    assert 'country' not in feature_cols, "Country must not be in features"
     
     # Predict
     features_df['pred_prob'] = model.predict(features_df[feature_cols])
