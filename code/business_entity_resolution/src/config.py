@@ -18,12 +18,20 @@ TRAIN_DIR = os.path.join(DATASET_DIR, 'train')
 TEST_DIR = os.path.join(DATASET_DIR, 'test')
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', os.path.join(BASE_DIR, 'output'))
 MODEL_DIR = os.environ.get('MODEL_DIR', os.path.join(BASE_DIR, 'code', 'business_entity_resolution', 'models'))
+CHECKPOINT_DIR = os.environ.get('CHECKPOINT_DIR', os.path.join(BASE_DIR, 'code', 'business_entity_resolution', 'checkpoints'))
 
 # Training files
 TRAIN_S1 = os.path.join(TRAIN_DIR, 'train_source1.tsv')
 TRAIN_S2 = os.path.join(TRAIN_DIR, 'train_source2.tsv')
 TRAIN_S3 = os.path.join(TRAIN_DIR, 'train_source3.tsv')
 TRAIN_GT = os.path.join(TRAIN_DIR, 'train_ground_truth.tsv')
+
+# Checkpoint files
+CHECKPOINT_TRAIN_S1 = os.path.join(CHECKPOINT_DIR, 'train_s1_clean.parquet')
+CHECKPOINT_TRAIN_S2 = os.path.join(CHECKPOINT_DIR, 'train_s2_clean.parquet')
+CHECKPOINT_TRAIN_S3 = os.path.join(CHECKPOINT_DIR, 'train_s3_clean.parquet')
+CHECKPOINT_TRAIN_CANDIDATES = os.path.join(CHECKPOINT_DIR, 'train_candidates.parquet')
+CHECKPOINT_TRAIN_FEATURES = os.path.join(CHECKPOINT_DIR, 'train_features.parquet')
 
 # Test files
 TEST_S1 = os.path.join(TEST_DIR, 'test_source1.tsv')
@@ -34,13 +42,15 @@ TEST_S3 = os.path.join(TEST_DIR, 'test_source3.tsv')
 MATCHING_OUTPUT = os.path.join(OUTPUT_DIR, 'matching_results.tsv')
 CANDIDATE_OUTPUT = os.path.join(OUTPUT_DIR, 'candidate_pairs.tsv')
 
-def update_paths(custom_dataset_dir=None, custom_output_dir=None, custom_model_dir=None):
+def update_paths(custom_dataset_dir=None, custom_output_dir=None, custom_model_dir=None, custom_checkpoint_dir=None):
     """Dynamically updates paths for cloud environments like Kaggle or Google Colab."""
     global DATASET_DIR, TRAIN_DIR, TEST_DIR
     global TRAIN_S1, TRAIN_S2, TRAIN_S3, TRAIN_GT
     global TEST_S1, TEST_S2, TEST_S3
     global OUTPUT_DIR, MATCHING_OUTPUT, CANDIDATE_OUTPUT
     global MODEL_DIR
+    global CHECKPOINT_DIR, CHECKPOINT_TRAIN_S1, CHECKPOINT_TRAIN_S2, CHECKPOINT_TRAIN_S3
+    global CHECKPOINT_TRAIN_CANDIDATES, CHECKPOINT_TRAIN_FEATURES
 
     if custom_dataset_dir:
         DATASET_DIR = os.path.abspath(custom_dataset_dir)
@@ -67,6 +77,14 @@ def update_paths(custom_dataset_dir=None, custom_output_dir=None, custom_model_d
 
     if custom_model_dir:
         MODEL_DIR = os.path.abspath(custom_model_dir)
+
+    if custom_checkpoint_dir:
+        CHECKPOINT_DIR = os.path.abspath(custom_checkpoint_dir)
+        CHECKPOINT_TRAIN_S1 = os.path.join(CHECKPOINT_DIR, 'train_s1_clean.parquet')
+        CHECKPOINT_TRAIN_S2 = os.path.join(CHECKPOINT_DIR, 'train_s2_clean.parquet')
+        CHECKPOINT_TRAIN_S3 = os.path.join(CHECKPOINT_DIR, 'train_s3_clean.parquet')
+        CHECKPOINT_TRAIN_CANDIDATES = os.path.join(CHECKPOINT_DIR, 'train_candidates.parquet')
+        CHECKPOINT_TRAIN_FEATURES = os.path.join(CHECKPOINT_DIR, 'train_features.parquet')
 
 # ─── Preprocessing ───────────────────────────────────────────────────
 # Universal business name abbreviation mappings (language-agnostic).
@@ -203,7 +221,6 @@ LGBM_PARAMS = {
     'verbose': -1,
     'n_jobs': -1,
     'random_state': 42,
-    'is_unbalance': True,
 }
 
 # Negative sampling ratio (negatives per positive) for training

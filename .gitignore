@@ -15,8 +15,12 @@ output/
 *.csv
 *.zip
 
-# Models
+# Models and checkpoints
 code/business_entity_resolution/models/
+code/business_entity_resolution/checkpoints/
+checkpoints/
+*.parquet
+*.pkl
 
 # OS specific
 .DS_Store

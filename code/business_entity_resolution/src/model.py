@@ -5,13 +5,17 @@ from sklearn.model_selection import GroupShuffleSplit
 import os
 import joblib
 import time
+from tqdm import tqdm
+import sys
 
 try:
     from . import config as _config
     from .config import LGBM_PARAMS, NEG_SAMPLE_RATIO, VAL_SPLIT_RATIO, RANDOM_SEED
+    from .features import FEATURE_COLUMNS
 except ImportError:
     import config as _config
     from config import LGBM_PARAMS, NEG_SAMPLE_RATIO, VAL_SPLIT_RATIO, RANDOM_SEED
+    from features import FEATURE_COLUMNS
 
 def calculate_f05_score(true_matches_dict, pred_matches_dict, all_s1_entities):
     """
@@ -108,8 +112,10 @@ def train_and_tune(train_df, all_s1_entities, ground_truth_df):
     train_data = train_df.iloc[train_idx]
     val_data = train_df.iloc[val_idx]
     
-    # Define features (all numeric columns except IDs and target)
-    feature_cols = [c for c in train_df.columns if c not in ['source1_entity_id', 'entity_id_2', 'is_match']]
+    # Define features (explicit list from features.py)
+    feature_cols = FEATURE_COLUMNS
+    assert len(feature_cols) == 17, "Expected exactly 17 features"
+    assert 'country' not in feature_cols, "Country must not be in features"
     
     print(f"  Train: {len(train_data)} pairs | Val: {len(val_data)} pairs")
     
@@ -117,8 +123,25 @@ def train_and_tune(train_df, all_s1_entities, ground_truth_df):
     lgb_val = lgb.Dataset(val_data[feature_cols], label=val_data['is_match'], reference=lgb_train)
     
     print("\nTraining LightGBM model...")
-    # Update early_stopping params
-    callbacks = [lgb.early_stopping(stopping_rounds=50, verbose=True)]
+    def make_progress_callback(total_rounds):
+        use_tqdm = sys.stdout.isatty()
+        if not use_tqdm:
+            def _dummy(env): pass
+            _dummy.order = 10
+            return _dummy
+        pbar = tqdm(total=total_rounds, desc="LightGBM training", unit="tree")
+        def _callback(env):
+            pbar.update(1)
+            if env.iteration + 1 >= env.end_iteration:
+                pbar.close()
+        _callback.order = 10
+        return _callback
+
+    callbacks = [
+        lgb.early_stopping(stopping_rounds=50, verbose=True),
+        lgb.log_evaluation(period=10),
+        make_progress_callback(LGBM_PARAMS.get('n_estimators', 500))
+    ]
     
     model = lgb.train(
         LGBM_PARAMS,
@@ -153,7 +176,9 @@ def train_and_tune(train_df, all_s1_entities, ground_truth_df):
     val_prob_arr = val_data['pred_prob'].values
     
     thresholds = np.arange(0.1, 0.95, 0.05)
-    for t in thresholds:
+    use_tqdm = sys.stdout.isatty()
+    iterator = tqdm(thresholds, desc="Tuning F0.5 threshold") if use_tqdm else thresholds
+    for t in iterator:
         mask = val_prob_arr >= t
         pred_dict = {}
         if np.any(mask):

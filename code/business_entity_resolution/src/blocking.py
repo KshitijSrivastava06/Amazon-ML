@@ -6,6 +6,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sparse_dot_topn import sp_matmul_topn
 import gc
 from collections import defaultdict
+import sys
 
 try:
     from .config import (
@@ -152,61 +153,58 @@ def generate_candidates_for_country(s1_df, s23_df, country_name, n_jobs=None):
     
     return all_candidates
 
-def run_blocking(s1_df, s2_df, s3_df, n_jobs=None):
+from tqdm import tqdm
+
+def run_blocking_streaming(s1_df, s2_df, s3_df, output_path, n_jobs=None):
     """
     Main blocking function. Discovers unique countries, partitions data, and generates candidates.
-    Returns a dictionary mapping S1_ID -> set(S2_S3_IDs).
+    Streams candidates directly to output_path as TSV to avoid buffering massive dictionaries in RAM.
     """
     print("Starting Blocking Phase...")
     start_time = time.time()
     
+    s1_df = s1_df.copy()
     s23_df = pd.concat([s2_df, s3_df], ignore_index=True)
     
-    # Dynamically discover all unique countries
-    all_countries = set(s1_df['country'].dropna().unique()) | set(s23_df['country'].dropna().unique())
+    s1_df['country'] = s1_df['country'].fillna('UNKNOWN')
+    s23_df['country'] = s23_df['country'].fillna('UNKNOWN')
+    
+    all_countries = sorted(list(set(s1_df['country'].unique()) | set(s23_df['country'].unique())))
     print(f"Discovered {len(all_countries)} unique countries: {all_countries}")
     
-    final_candidates = defaultdict(set)
+    first = True
+    total_pairs = 0
     
-    # Partition by country
-    for country in sorted(list(all_countries)):
-        s1_part = s1_df[s1_df['country'] == country].copy()
-        s23_part = s23_df[s23_df['country'] == country].copy()
+    use_tqdm = sys.stdout.isatty() if 'sys' in globals() else True
+    iterator = tqdm(all_countries, desc="Countries processed", unit="country") if use_tqdm else all_countries
+    
+    for country in iterator:
+        s1_part = s1_df[s1_df['country'] == country]
+        s23_part = s23_df[s23_df['country'] == country]
         
         country_candidates = generate_candidates_for_country(s1_part, s23_part, country, n_jobs=n_jobs)
         
-        # Merge into final dict
-        for k, v in country_candidates.items():
-            final_candidates[k].update(v)
-            
-        # Ensure every S1 entity in this partition is in the dict, even if empty (singleton)
         for s1_id in s1_part['entity_id']:
-            if s1_id not in final_candidates:
-                final_candidates[s1_id] = set()
+            if s1_id not in country_candidates:
+                country_candidates[s1_id] = set()
                 
-        del s1_part, s23_part, country_candidates
+        # Count pairs
+        pairs_in_country = sum(len(v) for v in country_candidates.values())
+        total_pairs += pairs_in_country
+                
+        rows = [{'source1_entity_id': k, 'candidate_entity_ids': ",".join(sorted(list(v)))}
+                for k, v in country_candidates.items()]
+                
+        pd.DataFrame(rows).to_csv(output_path, sep='\t', mode='w' if first else 'a',
+                                   header=first, index=False)
+        first = False
+        
+        del country_candidates, rows, s1_part, s23_part
         gc.collect()
                 
     elapsed = time.time() - start_time
-    total_pairs = sum(len(v) for v in final_candidates.values())
     print(f"\nBlocking complete in {elapsed:.1f}s. Generated {total_pairs} total candidate pairs.")
-    
-    return final_candidates
-
-def save_candidates(candidates_dict, output_path):
-    """
-    Saves candidates to candidate_pairs.tsv format.
-    """
-    print(f"Saving candidates to {output_path}...")
-    rows = []
-    for s1_id, match_set in candidates_dict.items():
-        match_str = ",".join(sorted(list(match_set)))
-        rows.append({'source1_entity_id': s1_id, 'candidate_entity_ids': match_str})
-        
-    df_out = pd.DataFrame(rows)
-    df_out.to_csv(output_path, sep='\t', index=False)
-    print("Saved.")
-    return df_out
+    print(f"Candidates saved to {output_path}")
 
 if __name__ == '__main__':
     # Small test on a tiny sample of the data to verify blocking works
@@ -235,5 +233,5 @@ if __name__ == '__main__':
         'country': ['US']
     })
     
-    res = run_blocking(s1, s2, s3, n_jobs=2)
-    print("Test Blocking Result:", res)
+    run_blocking_streaming(s1, s2, s3, 'test_candidate_pairs.tsv', n_jobs=2)
+    print("Test Blocking Result saved to test_candidate_pairs.tsv")

@@ -61,10 +61,10 @@ def preprocess_dataframe(df):
     df_clean['addr_clean'] = [normalize_text(a, 'address') for a in addrs]
     if 'business_address' in df_clean.columns:
         df_clean.drop(columns=['business_address'], inplace=True)
-    
-    df_clean['name_addr_clean'] = df_clean['name_clean'] + " " + df_clean['addr_clean']
-    df_clean['name_addr_clean'] = df_clean['name_addr_clean'].str.strip()
-    
+        
+    if 'country' in df_clean.columns:
+        df_clean['country'] = df_clean['country'].astype('category')
+        
     gc.collect()
     return df_clean
 
@@ -74,10 +74,15 @@ def load_and_preprocess(filepath, is_ground_truth=False):
     """
     fname = os.path.basename(filepath)
     print(f"  Reading {fname}...")
-    df = pd.read_csv(filepath, sep='\t')
+    df = pd.read_csv(filepath, sep='\t', dtype=str)
     
     if is_ground_truth:
         return df
+        
+    required = {'entity_id', 'country'}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"{filepath} is missing required columns: {missing}")
         
     print(f"  Preprocessing {len(df)} records in {fname}...")
     cleaned_df = preprocess_dataframe(df)

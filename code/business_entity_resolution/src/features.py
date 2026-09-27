@@ -111,87 +111,96 @@ def extract_features_for_pair(row):
     vals = _compute_pair_features(n1, n2, a1, a2, is_s2)
     return pd.Series(dict(zip(FEATURE_COLUMNS, vals)))
 
-def build_feature_matrix(candidates_df, s1_df, s2_df, s3_df, n_jobs=None, chunk_size=50000):
+def build_feature_matrix(candidates_path, s1_df, s2_df, s3_df, output_path, n_jobs=None, chunk_size=100000):
     """
-    Takes candidate pairs, joins the text data, and computes features in parallel
-    across multiple CPU cores.
+    Reads candidates from TSV in chunks, joins text data, computes features in parallel, 
+    and streams directly to a Parquet file to avoid OOM crashes.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from tqdm import tqdm
     
-    candidates_df expects columns: ['source1_entity_id', 'candidate_entity_id']
-    """
-    total_pairs = len(candidates_df)
-    print(f"Building feature matrix for {total_pairs} pairs...")
-    if total_pairs == 0:
-        return pd.DataFrame(columns=['source1_entity_id', 'entity_id_2'] + FEATURE_COLUMNS)
-        
+    print(f"Building feature matrix from {candidates_path}...")
     start_time = time.time()
     
     # Combine S2/S3
     s23_df = pd.concat([s2_df, s3_df], ignore_index=True)
     
-    # Keep only needed columns for speed
+    # Keep only needed columns for speed and set index for fast joining
     cols = ['entity_id', 'name_clean', 'addr_clean']
-    s1_sub = s1_df[cols].rename(columns={
-        'entity_id': 'source1_entity_id', 
-        'name_clean': 'name_clean_1', 
-        'addr_clean': 'addr_clean_1'
-    })
-    
-    s23_sub = s23_df[cols].rename(columns={
-        'entity_id': 'candidate_entity_id', 
-        'name_clean': 'name_clean_2', 
-        'addr_clean': 'addr_clean_2'
-    })
-    
-    # Join text back to candidates
-    print("  Merging text data...")
-    merged = pd.merge(candidates_df, s1_sub, on='source1_entity_id', how='inner')
-    merged = pd.merge(merged, s23_sub, on='candidate_entity_id', how='inner')
-    merged = merged.rename(columns={'candidate_entity_id': 'entity_id_2'})
-    
-    if len(merged) == 0:
-        return pd.DataFrame(columns=['source1_entity_id', 'entity_id_2'] + FEATURE_COLUMNS)
-        
-    # Convert series to Python primitives for rapid, low-overhead iteration
-    n1_vals = merged['name_clean_1'].fillna('').astype(str).tolist()
-    n2_vals = merged['name_clean_2'].fillna('').astype(str).tolist()
-    a1_vals = merged['addr_clean_1'].fillna('').astype(str).tolist()
-    a2_vals = merged['addr_clean_2'].fillna('').astype(str).tolist()
-    is_s2_vals = (merged['entity_id_2'].str.startswith('S2-')).astype(np.int8).tolist()
-    
-    pair_data = list(zip(n1_vals, n2_vals, a1_vals, a2_vals, is_s2_vals))
-    del n1_vals, n2_vals, a1_vals, a2_vals, is_s2_vals
+    s1_sub = s1_df[cols].set_index('entity_id')
+    s23_sub = s23_df[cols].set_index('entity_id')
     
     if n_jobs is None or n_jobs <= 0:
-        n_jobs = os.cpu_count() or 1
+        n_jobs = max(1, os.cpu_count() - 2)
         
     print(f"  Computing string similarities across {n_jobs} CPU core(s)...")
     
-    chunks = [pair_data[i:i + chunk_size] for i in range(0, len(pair_data), chunk_size)]
+    writer = None
+    total_pairs = 0
     
-    results = []
-    if n_jobs == 1 or len(chunks) <= 1:
-        # Sequential processing for single core or small data
-        for c in chunks:
-            results.extend(_process_chunk(c))
-    else:
-        # Multi-core multiprocessing
-        with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-            for chunk_res in executor.map(_process_chunk, chunks):
-                results.extend(chunk_res)
-                
-    features_arr = np.array(results, dtype=np.float32)
-    features_df = pd.DataFrame(features_arr, columns=FEATURE_COLUMNS)
+    # Process candidate file in chunks to bound memory
+    cand_iter = pd.read_csv(candidates_path, sep='\t', dtype=str, chunksize=chunk_size)
     
-    final_df = pd.concat([
-        merged[['source1_entity_id', 'entity_id_2']].reset_index(drop=True),
-        features_df.reset_index(drop=True)
-    ], axis=1)
-    
+    for cand_chunk in cand_iter:
+        cand_chunk['candidate_entity_ids'] = cand_chunk['candidate_entity_ids'].fillna('').str.split(',')
+        cand_exploded = cand_chunk.explode('candidate_entity_ids')
+        cand_exploded = cand_exploded[cand_exploded['candidate_entity_ids'] != '']
+        cand_exploded.rename(columns={'candidate_entity_ids': 'entity_id_2'}, inplace=True)
+        
+        if len(cand_exploded) == 0: 
+            continue
+            
+        # Merge text
+        merged = cand_exploded.join(s1_sub, on='source1_entity_id', how='inner')
+        merged = merged.join(s23_sub, on='entity_id_2', how='inner', rsuffix='_2')
+        
+        # Convert series to Python primitives for rapid, low-overhead iteration
+        n1_vals = merged['name_clean'].fillna('').astype(str).tolist()
+        n2_vals = merged['name_clean_2'].fillna('').astype(str).tolist()
+        a1_vals = merged['addr_clean'].fillna('').astype(str).tolist()
+        a2_vals = merged['addr_clean_2'].fillna('').astype(str).tolist()
+        is_s2_vals = (merged['entity_id_2'].str.startswith('S2-')).astype(np.int8).tolist()
+        
+        pair_data = list(zip(n1_vals, n2_vals, a1_vals, a2_vals, is_s2_vals))
+        del n1_vals, n2_vals, a1_vals, a2_vals, is_s2_vals
+        
+        sub_chunk_size = 10000
+        sub_chunks = [pair_data[i:i + sub_chunk_size] for i in range(0, len(pair_data), sub_chunk_size)]
+        
+        results = []
+        if n_jobs == 1:
+            for c in sub_chunks:
+                results.extend(_process_chunk(c))
+        else:
+            with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                for chunk_res in executor.map(_process_chunk, sub_chunks):
+                    results.extend(chunk_res)
+                    
+        features_arr = np.array(results, dtype=np.float32)
+        features_df = pd.DataFrame(features_arr, columns=FEATURE_COLUMNS)
+        
+        final_chunk_df = pd.concat([
+            merged[['source1_entity_id', 'entity_id_2']].reset_index(drop=True),
+            features_df
+        ], axis=1)
+        
+        table = pa.Table.from_pandas(final_chunk_df)
+        if writer is None:
+            writer = pq.ParquetWriter(output_path, table.schema)
+        writer.write_table(table)
+        
+        total_pairs += len(final_chunk_df)
+        
+    if writer:
+        writer.close()
+        
     elapsed = time.time() - start_time
-    rate = len(final_df) / max(elapsed, 0.001)
-    print(f"Feature engineering complete: {len(final_df)} pairs in {elapsed:.1f}s ({rate:.0f} pairs/sec).")
+    rate = total_pairs / max(elapsed, 0.001)
+    print(f"Feature engineering complete: {total_pairs} pairs in {elapsed:.1f}s ({rate:.0f} pairs/sec).")
+    print(f"Features streamed to {output_path}")
     
-    return final_df
+    return output_path
 
 if __name__ == '__main__':
     # Test feature extraction with synthetic test pairs
