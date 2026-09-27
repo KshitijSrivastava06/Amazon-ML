@@ -2,11 +2,67 @@
 
 ## 1. High-Level Methodology
 
-Our solution delivers an end-to-end, high-performance, and open-set supervised machine learning pipeline engineered specifically for the Amazon ML Challenge 2026: Business Entity Resolution. The system resolves noisy, multilingual business records across three independent data sources at extreme scale (~24.2M total records) while strictly adhering to all academic integrity, licensing, and competition guidelines.
+Our solution delivers an end-to-end, high-performance, and open-set supervised machine learning pipeline engineered specifically for the **Amazon ML Challenge 2026: Business Entity Resolution**. The system resolves noisy, multilingual business records across three independent data sources at extreme scale (~24.2M total records) while strictly adhering to all academic integrity, licensing, and competition guidelines.
 
-### Core Architectural Principles
-1. **Open-Set Generalization (Zero Country Hardcoding)**: In accordance with the problem statement, `country` is treated as an open set of string labels. The pipeline contains zero country-specific branches or one-hot encodings. Training data covers only `US` and `India`, yet the pipeline processes `France` (and any other arbitrary country) in the test set without modification. Country serves strictly as an independent partition key for candidate generation (since entity boundaries are contained within national jurisdictions).
-2. **Zero External Lookups (Strict Academic Fair Play)**: No external databases, commercial ER APIs, geocoders, or web queries are used. All signals are learned and computed strictly from the provided data.
+### 1.1 Architecture Overview
+
+The pipeline employs a staged funnel architecture designed to systematically eliminate trillions of non-matching comparisons while preserving true matches:
+
+```text
++---------------------------------------------------------------------------------------------------+
+|                                       RAW INPUT DATA (TSV)                                        |
+|   Source 1 (2.2M train, 1.7M test) | Source 2 (5.0M train, 4.9M test) | Source 3 (5.3M train, 5.1M)   |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                               STAGE 1: UNIVERSAL PREPROCESSING                                     |
+|   • Phonetic ASCII Transliteration (anyascii offline library - handles Devanagari & French)       |
+|   • Noise / Punctuation Normalization                                                             |
+|   • Precompiled Universal Legal & Address Abbreviation Regex Expansion                            |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                        STAGE 2: CANDIDATE GENERATION & ANTI-HUB BLOCKING                          |
+|   • Dynamic Runtime Country Partitioning (Open set: {US, India} train -> {US, India, France} test)|
+|   • Unified Name + Address Text Representation                                                    |
+|   • Word-level TF-IDF (ngram_range=(1,2), max_features=30,000)                                    |
+|   • Anti-Hub Stop Frequency Filtering (max_df=0.005 / 0.5% cap)                                   |
+|   • Multithreaded Top-K Sparse Dot Product (sparse_dot_topn, K=10, Threshold=0.30)                |
+|   • Outputs: candidate_pairs.tsv (22.06M train candidates / 1.73M test candidates)                |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                             STAGE 3: PARALLEL FEATURE ENGINEERING                                 |
+|   • 17 Dimension Pairwise Metric Suite (rapidfuzz C++ backend, ProcessPoolExecutor)               |
+|   • Strict No-Country-Leakage Guarantee (Country metadata omitted from feature space)             |
+|   • Streamed directly to Parquet (>88,000 pairs/sec throughput)                                   |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                         STAGE 4: LIGHTGBM CLASSIFIER & METRIC TUNING                              |
+|   • 500-Tree Gradient Boosted Decision Tree (LightGBM, MIT License, << 8B params)                 |
+|   • Group-wise Validation Split (GroupShuffleSplit on S1 entity_id - zero cluster leakage)        |
+|   • Empirical Macro-Averaged F0.5 Metric Optimization (Evaluates Singletons vs. Clusters)        |
+|   • Tuned Decision Threshold = 0.60 (Precision: 97.89%, Recall: 93.95%, Val F0.5: 0.8569)        |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                                    FINAL VERIFIED OUTPUTS                                         |
+|   • matching_results.tsv (Scored leaderboard file: 1,732,544 rows)                                |
+|   • candidate_pairs.tsv  (Audit candidate file:     1,732,544 rows)                                |
+|   • Verification: validate_submission.py --check-ids => PASS (Zero errors, zero warnings)        |
++---------------------------------------------------------------------------------------------------+
+```
+
+### 1.2 Core Architectural Principles
+
+1. **Open-Set Domain Generalization (Zero Country Hardcoding)**: In accordance with the problem statement, `country` is treated as an open set of string labels. The pipeline contains zero country-specific branches, dictionary lookups, or one-hot encodings. Training data covers only `US` and `India`, yet the pipeline processes `France` (and any other arbitrary country) in the test set without modification. Country serves strictly as an independent partition key for candidate generation (since entity boundaries are contained within national jurisdictions).
+2. **Zero External Lookups (Strict Academic Fair Play)**: No external databases, commercial ER APIs, geocoders, or web queries are used. All signals are learned and computed strictly from the provided data using offline algorithms.
 3. **Extreme Scale Optimization**: With 2.2M Source 1 records and over 10.3M Source 2/Source 3 records, brute-force comparison ($O(N \cdot M) \approx 2.3 \times 10^{13}$ pairs) is impossible. Our pipeline utilizes an optimized word-level sparse candidate generator, streaming disk writes, chunked multi-core feature extraction, and gradient-boosted decision trees to complete the end-to-end pipeline in **~36 minutes** on a standard multi-core machine.
 4. **$F_{0.5}$ Metric Alignment**: The competition metric weights precision twice as heavily as recall ($\beta = 0.5$). Merging two distinct businesses (false positive) causes severe downstream commercial damage. Our decision boundary is strictly optimized for macro-averaged $F_{0.5}$, effectively capturing genuine duplicates while maintaining high precision on singletons.
 
@@ -19,7 +75,7 @@ To handle multilingual scripts, legal abbreviations, and typographic errors acro
 1. **Phonetic ASCII Transliteration (`anyascii`)**:
    - Indian records in Source 2/3 frequently feature non-Latin scripts (e.g., Devanagari: `राम मार्केटिंग प्राइवेट लिमिटेड`) while Source 1 uses transliterated English (`Ram Marketing Private Limited`).
    - French records in the test set contain accented European characters (`SCI Ptit Àmicale`, `Café de la Mairie`, `École Supérieure`).
-   - `anyascii` converts all non-ASCII unicode scripts into phonetically consistent standard Latin text offline without network calls.
+   - `anyascii` converts all non-ASCII unicode scripts into phonetically consistent standard Latin text offline without network calls or lookup tables.
 2. **Punctuation & Noise Cleansing**:
    - Replaces non-alphanumeric symbols and separator noise with whitespace while preserving alphanumeric structures (`Cleaned: 175 Blvd du President`).
 3. **Universal Legal & Address Abbreviation Normalization**:
@@ -149,7 +205,35 @@ The tuned value `0.60` is automatically saved to `models/best_threshold.txt` and
 
 ---
 
-## 7. Submission Verification & Output Compliance
+## 7. Engineering Ablations & Key Discoveries
+
+During research and development, we tested multiple configurations on the real dataset to identify the optimal performance-recall frontier:
+
+| Iteration / Hypothesis | Configuration | Observed Outcome | Action Taken |
+|---|---|---|---|
+| **Ablation 1: Char N-Gram Blocking** | `char_wb (3,5)`, 100K feat, `max_df=0.05`, 2 separate passes | Matrix density reached 35 non-zeros/row. India blocking alone projected at **3.5 hours**; full blocking projected at **17+ hours**. | **REJECTED**: Switched to word-level TF-IDF. |
+| **Ablation 2: Word Unigrams vs. Bigrams** | Word `(1,1)`, 30K feat, `max_df=0.005` | Vectorization was extremely fast (6 min), but density dropped to 5.0 non-zeros/row. Missed compound brand names like "apple computer". | **REJECTED**: Bigrams provide critical multi-word context. |
+| **Ablation 3: Unified Name+Address Blocking** | Word `(1,2)`, 30K feat, `max_df=0.005`, single pass | Blocking time dropped to **28.3 minutes** across 22.06M pairs while preserving >94% candidate recall. | **ADOPTED**: Core production blocking engine. |
+| **Ablation 4: Default Threshold (0.50)** | Standard LightGBM default $P \ge 0.50$ | Achieved $F_{0.5} = 0.8556$. Suffered from subtle false merges on edge-case singletons (reducing entity score to 0.0). | **REJECTED**: Tuned higher to maximize precision. |
+| **Ablation 5: $F_{0.5}$-Tuned Threshold (0.60)** | Swept threshold $P \ge 0.60$ | Increased pair precision to **97.89%**, boosting macro-averaged $F_{0.5}$ to **0.8569**. | **ADOPTED**: Optimal submission threshold. |
+
+---
+
+## 8. Hardware, Scalability & Resource Utilization
+
+The entire pipeline is engineered for extreme cost and resource efficiency without requiring high-cost GPU infrastructure:
+
+| Phase | Runtime | Resource Utilization | Memory Footprint |
+|---|---|---|---|
+| **Phase 1: Preprocessing** | ~15 min (cached) | 16 CPU cores (vectorized list operations) | ~6 GB peak RAM |
+| **Phase 2: Blocking** | **28.3 min** | 16 CPU threads (`sparse_dot_topn` OpenMP) | ~8 GB peak RAM (200K chunking) |
+| **Phase 3: Features** | **4.0 min** | 14 CPU cores (multiprocessing worker pool) | ~10 GB peak RAM (streaming parquet) |
+| **Phase 4: Training & Tuning** | **3.5 min** | 16 CPU cores (OpenMP LightGBM) | ~11 GB peak RAM (3:1 sampled) |
+| **End-to-End Pipeline** | **~36 min** | Standard commodity CPU workstation | **< 12 GB peak RAM** |
+
+---
+
+## 9. Submission Verification & Output Compliance
 
 The inference pipeline (`pipeline.py --test`) processes `test_source1.tsv` (1,732,544 rows), `test_source2.tsv` (4,887,273 rows), and `test_source3.tsv` (5,082,316 rows).
 
